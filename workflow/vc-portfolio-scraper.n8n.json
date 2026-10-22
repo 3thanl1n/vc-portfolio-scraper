@@ -1,0 +1,2083 @@
+{
+  "name": "VC Portfolio Scraper (Portco Finder v3.18)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "portco-agent",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1700,
+        0
+      ],
+      "id": "agt-webhook",
+      "name": "Webhook In"
+    },
+    {
+      "parameters": {
+        "jsCode": "// v3 (B5): optional shared-secret gate — set EXPECTED_TOKEN here AND send header x-portco-token from Clay to enable.\nconst EXPECTED_TOKEN = \"\";\nconst _hdrs = ($input.first().json && $input.first().json.headers) || {};\nif (EXPECTED_TOKEN && String(_hdrs['x-portco-token'] || '') !== EXPECTED_TOKEN) { throw new Error('webhook auth failed: missing/wrong x-portco-token header'); }\n// Build the dedup index from Claygent (only entries that already have a URL count as \"known\").\n// No agent, no prompt — this flow discovers companies from the VC's own site.\nconst body = ($input.first().json && $input.first().json.body) ? $input.first().json.body : $input.first().json;\nconst vc_account_id = body.vc_account_id || \"\";\nconst vc_name       = body.vc_name || \"\";\nconst vc_domain     = body.vc_domain || \"\";\nconst claygent      = body.claygent_portcos;\nfunction normalizeDomain(d){ if(!d||typeof d!==\"string\") return \"\"; return d.toLowerCase().trim().replace(/^https?:\\/\\//,\"\").replace(/^www\\./,\"\").replace(/[\\/?#].*$/,\"\"); }\nfunction registrableDomain(d){ const n=normalizeDomain(d); if(!n) return \"\"; const p=n.split(\".\"); if(p.length<=2) return n; const last2=p.slice(-2).join(\".\"); const COMPOUND=[\"co.uk\",\"org.uk\",\"ac.uk\",\"gov.uk\",\"co.kr\",\"com.br\",\"com.au\",\"co.jp\",\"co.il\",\"co.za\",\"co.nz\",\"com.mx\",\"co.in\",\"com.sg\",\"com.tr\",\"com.cn\",\"com.hk\",\"co.th\",\"com.tw\",\"com.co\"]; return (COMPOUND.indexOf(last2)>-1 && p.length>=3)?p.slice(-3).join(\".\"):last2; }\nfunction normalizeName(name){ if(!name||typeof name!==\"string\") return \"\"; let s=name.toLowerCase().trim(); s=s.replace(/[.,]?\\s+(inc|llc|ltd|limited|corp|corporation|co|gmbh|sa|ag|plc|pte|bv)\\.?$/i,\"\"); return s.replace(/[^a-z0-9]/g,\"\"); }\nfunction parseExisting(raw){ if(!raw) return []; let arr=null; if(Array.isArray(raw)) arr=raw; else if(typeof raw===\"object\"&&Array.isArray(raw.portfolio_companies)) arr=raw.portfolio_companies; else if(typeof raw===\"string\"){ try{const p=JSON.parse(raw); arr=Array.isArray(p)?p:((p&&p.portfolio_companies)||null);}catch(e){arr=null;} } if(!arr) return []; return arr.map(function(x){ return (typeof x===\"string\")?{name:x,url:null}:{name:(x&&x.name)||\"\",url:(x&&x.url)||null}; }).filter(function(x){return x.name||x.url;}); }\nconst existing = parseExisting(claygent);\nconst knownNames = []; const knownDomains = [];\nfor (const p of existing){ if (!p.url) continue; const n = normalizeName(p.name); if(n) knownNames.push(n); const d = registrableDomain(p.url); if(d) knownDomains.push(d); }\nreturn [{ json: { vc_account_id, vc_name, vc_domain, known_names: knownNames, known_domains: knownDomains } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1500,
+        0
+      ],
+      "id": "buildcfg",
+      "name": "Build config"
+    },
+    {
+      "parameters": {
+        "resource": "MapSearch",
+        "operation": "map",
+        "additionalFields": {},
+        "useCustomBody": true,
+        "customBody": "={{ JSON.stringify({ url: \"https://\" + $json.vc_domain, search: \"portfolio\", limit: 5000 }) }}",
+        "requestOptions": {}
+      },
+      "type": "@mendable/n8n-nodes-firecrawl.firecrawl",
+      "typeVersion": 1,
+      "position": [
+        -1300,
+        0
+      ],
+      "id": "799f5f08-243a-4a14-bed4-3fb43d690254",
+      "name": "Map site (portfolio URLs)",
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "function normalizeDomain(d){ if(!d||typeof d!==\"string\") return \"\"; return d.toLowerCase().trim().replace(/^https?:\\/\\//,\"\").replace(/^www\\./,\"\").replace(/[\\/?#].*$/,\"\"); }\nfunction registrableDomain(d){ const n=normalizeDomain(d); if(!n) return \"\"; const p=n.split(\".\"); if(p.length<=2) return n; const last2=p.slice(-2).join(\".\"); const COMPOUND=[\"co.uk\",\"org.uk\",\"ac.uk\",\"gov.uk\",\"co.kr\",\"com.br\",\"com.au\",\"co.jp\",\"co.il\",\"co.za\",\"co.nz\",\"com.mx\",\"co.in\",\"com.sg\",\"com.tr\",\"com.cn\",\"com.hk\",\"co.th\",\"com.tw\",\"com.co\"]; return (COMPOUND.indexOf(last2)>-1 && p.length>=3)?p.slice(-3).join(\".\"):last2; }\nfunction normalizeName(name){ if(!name||typeof name!==\"string\") return \"\"; let s=name.toLowerCase().trim(); s=s.replace(/[.,]?\\s+(inc|llc|ltd|limited|corp|corporation|co|gmbh|sa|ag|plc|pte|bv)\\.?$/i,\"\"); return s.replace(/[^a-z0-9]/g,\"\"); }\nfunction cleanUrl(u){ if(!u||typeof u!==\"string\") return null; let s=u.trim(); const m=s.match(/https?:\\/\\/[^\\s)\\]]+/i); if(m) s=m[0]; if(s===\"\"||s===\"/\"||s.indexOf(\"#\")===0||/^(javascript|mailto|tel):/i.test(s)) return null; if(/^https?:\\/\\//i.test(s)) return /^https?:\\/\\/[^\\/\\s]+\\.[a-z]{2,}/i.test(s)?s:null; return /^[^\\/\\s]+\\.[a-z]{2,}/i.test(s)?(\"https://\"+s):null; }\nfunction hostOf(u){ return String(u||\"\").replace(/^https?:\\/\\//i,\"\").split(\"/\")[0].toLowerCase(); }\nconst BLOCK = new Set([\"firecrawl.dev\",\"linkedin.com\",\"twitter.com\",\"x.com\",\"facebook.com\",\"instagram.com\",\"threads.net\",\"crunchbase.com\",\"youtube.com\",\"pitchbook.com\",\"bloomberg.com\",\"wikipedia.org\",\"g2.com\",\"github.com\",\"medium.com\",\"apps.apple.com\",\"play.google.com\",\"getro.com\",\"getro.io\",\"consider.com\",\"pinpointhq.com\",\"teamtailor.com\",\"greenhouse.io\",\"lever.co\",\"ashbyhq.com\",\"workable.com\",\"bamboohr.com\",\"altareturn.com\"]);\nconst PLATFORM_SUBDOMAIN = /^(jobs|job|careers|career|apply|boards|board|talent|hire|hiring|work)\\./i;\n// Let an LLM pick THE portfolio-list page from the map results. Handles any slug (/companies-list,\n// /portfolio, ...) and domain drift (abstract.vc -> abstract.com) that deterministic rules can't.\nconst cfg = $('Build config').first().json;\nconst resp = $input.first().json || {};\nfunction getLinks(d,dep){ if(!d||typeof d!==\"object\"||dep>6) return null; if(Array.isArray(d.links)) return d.links; if(d.data&&Array.isArray(d.data.links)) return d.data.links; if(Array.isArray(d.data)) return d.data; if(Array.isArray(d)) return d; for(const k in d){ const v=d[k]; if(v&&typeof v===\"object\"){ const f=getLinks(v,(dep||0)+1); if(f) return f; } } return null; }\nconst links = getLinks(resp,0) || [];\nconst cands = []; const seen = new Set();\nfor(const l of links){\n  const url = (typeof l===\"string\") ? l : (l && l.url) ? l.url : \"\";\n  if(!url) continue;\n  if(/\\.(xml|rss|json|txt|pdf)(\\?|$)/i.test(url)) continue;        // drop sitemaps/feeds\n  if(seen.has(url)) continue; seen.add(url);\n  cands.push({ url: url, title: (l&&l.title)||\"\", desc: String((l&&l.description)||\"\").slice(0,220) });\n  if(cands.length>=400) break;\n}\n// v3 (B4): deterministically promote portfolio-ish slugs before truncating to 60 (map order kept within classes — stable sort)\nconst PRIO = /(portfolio|companies|investments|our-companies|startups|ventures)/i;\ncands.sort(function(a,b){ return (PRIO.test(b.url)?1:0)-(PRIO.test(a.url)?1:0); });\nconst top = cands.slice(0,60);\nconst list = top.map((c,i)=> (i+1)+\". \"+c.url+\"\\n   title: \"+c.title+\"\\n   desc: \"+c.desc).join(\"\\n\");\nconst prompt =\n  \"Below are pages from the website of the VC firm \\\"\" + cfg.vc_name + \"\\\".\\n\\n\" +\n  \"Identify THE single page that lists the firm's PORTFOLIO COMPANIES — the directory/index of companies they have invested in. It is NOT the team page, blog, jobs board, news, or a sitemap. Use the titles and descriptions to decide (a portfolio list usually names multiple companies). If several qualify, choose the most comprehensive one. Copy the url EXACTLY from the list. If none of these is a portfolio list, return an empty url.\\n\\n\" +\n  \"Pages:\\n\" + list + \"\\n\\n\" +\n  \"Respond ONLY as compact JSON: {\\\"index_url\\\":\\\"<exact url from the list, or empty string>\\\"}\";\nreturn [{ json: { vc_account_id: cfg.vc_account_id, vc_name: cfg.vc_name, vc_domain: cfg.vc_domain, _candidate_urls: top.map(c=>c.url), _llm_prompt: prompt } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1100,
+        0
+      ],
+      "id": "b05115a1-3b05-436b-9708-4cb01636fc8e",
+      "name": "Build find-index prompt"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "claude-opus-4-6",
+          "mode": "list",
+          "cachedResultName": "claude-opus-4-6"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "={{ $json._llm_prompt }}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.anthropic",
+      "typeVersion": 1,
+      "position": [
+        -900,
+        0
+      ],
+      "id": "c2263ad8-86f8-4a18-9370-b3aaaf7bb569",
+      "name": "Pick portfolio index",
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "function normalizeDomain(d){ if(!d||typeof d!==\"string\") return \"\"; return d.toLowerCase().trim().replace(/^https?:\\/\\//,\"\").replace(/^www\\./,\"\").replace(/[\\/?#].*$/,\"\"); }\nfunction registrableDomain(d){ const n=normalizeDomain(d); if(!n) return \"\"; const p=n.split(\".\"); if(p.length<=2) return n; const last2=p.slice(-2).join(\".\"); const COMPOUND=[\"co.uk\",\"org.uk\",\"ac.uk\",\"gov.uk\",\"co.kr\",\"com.br\",\"com.au\",\"co.jp\",\"co.il\",\"co.za\",\"co.nz\",\"com.mx\",\"co.in\",\"com.sg\",\"com.tr\",\"com.cn\",\"com.hk\",\"co.th\",\"com.tw\",\"com.co\"]; return (COMPOUND.indexOf(last2)>-1 && p.length>=3)?p.slice(-3).join(\".\"):last2; }\nfunction normalizeName(name){ if(!name||typeof name!==\"string\") return \"\"; let s=name.toLowerCase().trim(); s=s.replace(/[.,]?\\s+(inc|llc|ltd|limited|corp|corporation|co|gmbh|sa|ag|plc|pte|bv)\\.?$/i,\"\"); return s.replace(/[^a-z0-9]/g,\"\"); }\nfunction cleanUrl(u){ if(!u||typeof u!==\"string\") return null; let s=u.trim(); const m=s.match(/https?:\\/\\/[^\\s)\\]]+/i); if(m) s=m[0]; if(s===\"\"||s===\"/\"||s.indexOf(\"#\")===0||/^(javascript|mailto|tel):/i.test(s)) return null; if(/^https?:\\/\\//i.test(s)) return /^https?:\\/\\/[^\\/\\s]+\\.[a-z]{2,}/i.test(s)?s:null; return /^[^\\/\\s]+\\.[a-z]{2,}/i.test(s)?(\"https://\"+s):null; }\nfunction hostOf(u){ return String(u||\"\").replace(/^https?:\\/\\//i,\"\").split(\"/\")[0].toLowerCase(); }\nfunction pathOf(u){ const s=String(u||\"\").replace(/^https?:\\/\\//i,\"\"); const i=s.indexOf(\"/\"); return i<0?\"\":s.slice(i).replace(/[?#].*$/,\"\").replace(/\\/+$/,\"\"); }   // NEW: path after host; \"\" = bare root\nconst BLOCK = new Set([\"firecrawl.dev\",\"linkedin.com\",\"twitter.com\",\"x.com\",\"facebook.com\",\"instagram.com\",\"threads.net\",\"crunchbase.com\",\"youtube.com\",\"pitchbook.com\",\"bloomberg.com\",\"wikipedia.org\",\"g2.com\",\"github.com\",\"medium.com\",\"apps.apple.com\",\"play.google.com\",\"getro.com\",\"getro.io\",\"consider.com\",\"pinpointhq.com\",\"teamtailor.com\",\"greenhouse.io\",\"lever.co\",\"ashbyhq.com\",\"workable.com\",\"bamboohr.com\",\"altareturn.com\"]);\nconst PLATFORM_SUBDOMAIN = /^(jobs|job|careers|career|apply|boards|board|talent|hire|hiring|work)\\./i;\nconst cfg = $('Build config').first().json;\nconst ctx = $('Build find-index prompt').first().json;\nconst cands = (ctx._candidate_urls||[]).map(function(u){return String(u);});\nconst candSet = new Set(cands); const candNorm = new Set(cands.map(function(u){return u.replace(/\\/$/,\"\");}));\nconst resp = $input.first().json || {};\nfunction llmText(r){ r=r||{}; let c=null;\n  if(r.choices&&r.choices[0]&&r.choices[0].message) c=r.choices[0].message.content;\n  if(c==null&&r.message) c=(typeof r.message.content!==\"undefined\")?r.message.content:r.message;\n  if(c==null&&typeof r.content!==\"undefined\") c=r.content;\n  if(c==null&&typeof r.text!==\"undefined\") c=r.text;\n  if(c==null&&typeof r.output_text!==\"undefined\") c=r.output_text;\n  if(Array.isArray(c)) c=c.map(function(b){return (b&&(b.text||b.content))?(b.text||b.content):(typeof b===\"string\"?b:\"\");}).join(\" \");\n  if(c&&typeof c===\"object\") c=c.text||c.content||JSON.stringify(c);\n  return (typeof c===\"string\")?c:(c!=null?String(c):\"\"); }\nconst txt = llmText(resp);\nlet picked = \"\";\ntry{ const o=JSON.parse(txt); if(o&&typeof o.index_url===\"string\") picked=o.index_url.trim(); }\ncatch(e){ const m=txt.match(/\\{[\\s\\S]*\\}/); if(m){ try{ const o=JSON.parse(m[0]); if(o&&typeof o.index_url===\"string\") picked=o.index_url.trim(); }catch(e2){} } }\nif(!picked){ const m2=txt.match(/https?:\\/\\/[^\\s\"')]+/i); if(m2) picked=m2[0]; }\n// anti-hallucination: must be one of the candidates we showed it\nif(picked && !candSet.has(picked) && !candNorm.has(picked.replace(/\\/$/,\"\"))) picked=\"\";\n\nif(!picked){\n  // ── Single-pager fallback (2026-06-07, Footwork) ─────────────────────────────\n  // Some firms (esp. seed funds on Webflow/Carrd) have NO portfolio sub-page — the\n  // portfolio is listed inline on the homepage. Map then surfaces only the site root,\n  // and the picker correctly won't call the homepage a \"portfolio index\" → empty pick.\n  // Rather than quarantine, crawl the homepage and let harvest read it.\n  // GATE on the single-pager signature so we DON'T auto-crawl the root of a big\n  // multi-page site that simply has no portfolio page (that burns harvest credits and\n  // still quarantines). Signature = map surfaced only the firm's own domain, ≤2 URLs,\n  // at least one of which is the bare root. `_picker_fallback` keeps the audit trail.\n  const vcReg = registrableDomain(cfg.vc_domain);\n  const onVcDomain = cands.length>0 && cands.every(function(u){ return registrableDomain(u)===vcReg; });\n  const rootCand = cands.find(function(u){ return registrableDomain(u)===vcReg && pathOf(u)===\"\"; });\n  if(onVcDomain && cands.length<=2 && rootCand){\n    return [{ json: { vc_account_id: cfg.vc_account_id, vc_name: cfg.vc_name, vc_domain: cfg.vc_domain, index_url: rootCand, _picker_fallback: \"single_page_root\" } }];\n  }\n  // OPTIONAL — map returned nothing at all (blocked/transient). Try the homepage anyway;\n  // a dead domain just self-quarantines downstream (\"crawl returned no pages\").\n  // Delete this block if you'd rather an empty map go straight to review.\n  if(cands.length===0 && vcReg){\n    return [{ json: { vc_account_id: cfg.vc_account_id, vc_name: cfg.vc_name, vc_domain: cfg.vc_domain, index_url: \"https://\"+normalizeDomain(cfg.vc_domain), _picker_fallback: \"empty_map_root\" } }];\n  }\n  return [{ json: { vc_account_id: cfg.vc_account_id, vc_name: cfg.vc_name, vc_domain: cfg.vc_domain, index_url: \"\", _quarantine: true, _reason: \"no portfolio-list page identified from map\" } }];\n}\nreturn [{ json: { vc_account_id: cfg.vc_account_id, vc_name: cfg.vc_name, vc_domain: cfg.vc_domain, index_url: picked } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        0
+      ],
+      "id": "5d1a3745-256b-41ec-b3aa-3a5b3cf312b5",
+      "name": "Parse index pick"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c-q",
+              "leftValue": "={{ $json._quarantine }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -500,
+        0
+      ],
+      "id": "ad6de619-cf5e-4f22-8193-144bc284e677",
+      "name": "Portfolio page found?"
+    },
+    {
+      "parameters": {
+        "jsCode": "const c = $input.first().json;\nconst idx = c.index_url || (c.vc_domain ? (\"https://\" + String(c.vc_domain).replace(/^https?:\\/\\//,\"\")) : \"(website unknown)\");\nconst sd = $getWorkflowStaticData('global');\nfunction memKey(dm){ return String(dm||'').toLowerCase().replace(/^https?:\\/\\//,'').replace(/^www\\./,'').replace(/[\\/?#].*$/,''); }\nconst mem = (sd.vc_memory || {})[memKey(c.vc_domain)] || null;\nlet agent_prompt =\n  \"VC firm: \" + (c.vc_name || \"(unknown)\") + \"\\n\" +\n  \"Firm domain: \" + (c.vc_domain || \"\") + \"\\n\" +\n  \"Portfolio page (already located for you): \" + idx + \"\\n\";\nconst fp = c._fingerprint || {};\nif (fp.found) {\n  agent_prompt += \"\\nAPI FINGERPRINT SCAN (deterministic pre-scan of the page source and its script bundles — verify before trusting):\\n\" + fp.summary + \"\\n\";\n} else {\n  agent_prompt += \"\\nAPI FINGERPRINT SCAN: no API signatures detected in the page source\" + (fp.summary ? (\" (\" + fp.summary + \")\") : \"\") + \". The page may still be API-backed via runtime-loaded config.\\n\";\n}\nif (mem) {\n  agent_prompt += \"\\nPRIOR RUN (\" + (mem.ts || \"?\") + \"): strategy=\" + (mem.strategy || \"?\") +\n    (mem.archetype ? (\", archetype=\" + mem.archetype) : \"\") +\n    (mem.last_company_count ? (\", last harvest count=\" + mem.last_company_count) : \"\") +\n    (mem.crawl_url ? (\", crawl_url=\" + mem.crawl_url) : \"\") +\n    (mem.notes ? (\"\\nPrior notes: \" + mem.notes) : \"\") +\n    \"\\nVerify the prior approach with ONE cheap call first; if it still holds, return the SAME strategy without re-discovering — do not switch strategies for stylistic reasons; consistency across runs matters downstream. If it fails, discover from scratch.\\n\";\n}\nagent_prompt += \"\\nDiscover how this firm's portfolio companies are served and act per your instructions.\";\nreturn [{ json: { ...c, agent_prompt } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -300,
+        0
+      ],
+      "id": "agt-buildinput",
+      "name": "Build agent input"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.agent_prompt }}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You are a Portfolio Discovery ANALYST for a GTM pipeline. For ONE VC firm you are given its located portfolio page URL, the firm's domain, a deterministic API FINGERPRINT SCAN of the page source, and sometimes a PRIOR RUN record. Your job: determine HOW this firm's portfolio companies are served, then either extract them yourself (small, direct cases only) or hand off to the right executor. You are the decision-maker, not the bulk carrier: large data must NEVER flow through you. A downstream stage dedupes, resolves and writes, so never resolve domains yourself. Work through your tools.\n\nYOUR TOOLS:\n- think: state your plan/observation in one line before acting.\n- analyze_page(url): scrape -> clean markdown + on-page links + HTTP status. Your first call on the portfolio page (unless a PRIOR RUN record tells you what to verify instead).\n- firecrawl_scrape_extract(url): scrape -> structured companies JSON. For static/list pages with real company links.\n- firecrawl_map(url): list a site's URLs. To find portfolio sub-pages / per-letter / by-batch / page-2/3 pages.\n- firecrawl_render(url): heavier scrape (stealth proxy + wait) for JS pages or mild blocks. At most once.\n- web_search(query): research a site's API or a public data source/mirror (e.g. '<firm> portfolio api', '<site> algolia', 'site:github.com <firm> companies json').\n- http_request(http_method,url,headers_json,body_json): call a JSON API endpoint you discovered (no auth attached; you supply the full URL, headers and body). ONLY for JSON API endpoints — NEVER use it to fetch raw HTML pages (raw pages flood your context; the FINGERPRINT SCAN already covers the page source). Probe totals with the SMALLEST page first (Algolia hitsPerPage=0 returns nbHits with zero hits; per_page=1) — read the total, THEN decide; never pull hundreds of records just to count them.\n\nDECISION RECIPE (cheapest that works; escalate only as needed):\n0. If a PRIOR RUN record is present: verify it with ONE cheap call (analyze_page, or one http_request if it names an API endpoint). If it still holds, return the same strategy immediately. If not, continue below.\n1. analyze_page(portfolio URL). Real company links present inline and the directory is small (<=~150) -> firecrawl_scrape_extract -> strategy='inline'. Your companies array must contain EVERY company — NEVER a sample (validation auto-rejects inline/api payloads smaller than half your estimated_count). If an inline static list exceeds ~150-200 entries, do NOT enumerate it yourself: strategy='giant_flag' with notes saying the page is a fully-static inline list with external links — the harvester fetches and parses it in code at zero context cost.\n2. The list is split across URL-addressable pages (page 2/3..., ?page=, A-Z tabs) -> collect those page URLs into page_urls -> strategy='paginated'. A deterministic executor scrapes them — do NOT scrape them yourself.\n3. Companies live on many same-domain sub-pages / per-company profile pages -> put the best start URL in crawl_url -> strategy='crawl'. A deterministic executor crawls server-side — do NOT submit or poll any crawl yourself. (Use firecrawl_map only to confirm the sub-page shape.) Also set path_hint to the shared profile-path prefix (e.g. /portfolio/) when it is obvious — the executor uses it to scope the crawl. AND: if the directory page has a pager with enumerable URLs that you OBSERVED (links like ?page=2 or /page/2 or A-Z tabs), collect EVERY directory page URL — page 1 through the last, full absolute URLs — into page_urls. For a crawl verdict, page_urls means 'scrape exactly these directory pages'; the crawler's own link discovery silently loses query-string pages, so omitting an observed pager from page_urls loses companies.\n4. The page is JS/empty or a search directory -> it is API-backed. Find the endpoint: check the FINGERPRINT SCAN first, then web_search. If the scan lists wp_namespaces / wp_custom_route entries, probe those CUSTOM routes first (e.g. <ns>/get-companies, <ns>/get-company-content?id=...) — custom WP endpoints usually expose the fields (external website, status) that the generic wp/v2 API lacks. A names-only LIST response does NOT mean the site lacks domains: per-item detail/content endpoints often carry each company's external website — say so in notes for the harvester. THE ONE API RULE: pull the API yourself ONLY if its first response reports a total of <=~150 items AND you can finish within ~3 more http_request calls -> strategy='api', fill companies (the API's website/domain fields are the firm's real data — you may use them). ANY other API-backed directory — bigger, unknown total, infinite scroll, needs pagination or faceting — do NOT pull it: strategy='giant_flag', and put the located URL plus the endpoint/keys/index you found into notes (the harvester starts from your notes).\n5. Page broken, auth-gated, bot-walled, or you cannot determine the mechanism -> strategy='review' with notes describing exactly what you saw. NEVER return a small partial subset as if it were complete.\n\nHARD ANCHORING for scraped pages: only return domains/lookup_urls that LITERALLY APPEAR as links (or alt-text/names) on pages you fetched; never web-search to invent a company's domain; never add names not on the page. (When you CALL the firm's own API, the website/domain it returns IS the firm's real data — use it.) If a company's only link is an ARTICLE about it on a content platform (substack/medium/...), return name + domain:\"\" + that article link in lookup_url. If companies link to INTERNAL PROFILE PAGES on the firm's own site, that is the CRAWL archetype (step 3) — return strategy='crawl'; NEVER return the firm's profile pages as inline lookup_url entries. BEFORE settling on crawl, ONE detour (max 2 http_request probes, then commit): if the FINGERPRINT SCAN shows a headless-CMS backend (Sanity project id, Contentful space, Prismic repo), the profile pages' data lives in that CMS and is often publicly queryable — for Sanity, use the VERSIONED endpoint with POST (verified live; /v1 rejects POST, and URL-baked queries get mangled in transit): POST https://<projectId>.api.sanity.io/v2021-10-21/data/query/production with JSON body {\"query\": \"array::unique(*[]._type)\"} to list document types, then POST {\"query\": \"*[_type=='company']{name, url, exited}\"} (GROQ accepts single quotes; adjust the type name to what you found) — Sanity company documents typically carry the external website (url) AND an exited/status flag, so exclude exited there directly. If it answers WITHOUT auth and the total fits THE ONE API RULE -> strategy='api' (the CMS fields ARE the firm's real data). If it returns 401/403, the dataset/type is unclear, or 2 probes are spent -> strategy='crawl'. Never retry the CMS across runs if a PRIOR RUN already settled on crawl after probing. EXCLUDE exited/acquired/prior companies, the firm's own domain, social/CDN/jobs/login links, and category labels.\n\nCOST: analyze_page is cheap. web_search/http_request are the API path. firecrawl_render at most once. Don't loop a tool on the same input. Paginated, crawl and giant directories are CHEAPER handed off than done by you — your context is the most expensive resource in this flow.\n\nOUTPUT only JSON: {strategy, companies:[{name,domain,lookup_url,source_url}], page_urls:[], crawl_url, path_hint, estimated_count (= TOTAL entries you observed in the directory BEFORE any exited/acquired exclusions; state in notes how many you excluded), archetype, tools_used:[], escalated, confidence, notes}. inline/api -> fill companies with EVERY company found, never a subset. FINAL ANSWER FORMAT (critical): emit the JSON object BARE and DIRECT — your final message starts with { and ends with } — NOT wrapped in any 'output' or 'final_answer' key, NOT inside markdown fences, and NEVER JSON-encoded as a string with escaped quotes. A wrapped or stringified answer is rejected by validation and the entire run is discarded. paginated -> fill page_urls. crawl -> fill crawl_url (+ path_hint when obvious) AND page_urls with every directory page URL (1..last) whenever you observed a pager on the directory — a crawl verdict that mentions pagination in notes but leaves page_urls empty is an ERROR. giant_flag/review -> companies and page_urls empty + notes (for giant_flag the notes MUST carry the endpoint details you found).",
+          "maxIterations": 25,
+          "returnIntermediateSteps": true,
+          "passthroughBinaryImages": false
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        -60,
+        0
+      ],
+      "id": "agt-agent",
+      "name": "Portfolio Discovery Agent",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "claude-opus-4-8",
+          "cachedResultName": "Claude Opus 4.8"
+        },
+        "options": {
+          "maxTokensToSample": 16384
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.5,
+      "position": [
+        -360,
+        300
+      ],
+      "id": "agt-model",
+      "name": "Anthropic Chat Model"
+    },
+    {
+      "parameters": {},
+      "type": "@n8n/n8n-nodes-langchain.toolThink",
+      "typeVersion": 1.1,
+      "position": [
+        -440,
+        300
+      ],
+      "id": "agt-think",
+      "name": "think"
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "ALWAYS call this FIRST, on the portfolio page. Scrapes the page and returns clean markdown, the list of links found on the page, and the HTTP status. Use it only to INSPECT how the companies are served (inline links vs JS/empty vs paginated sub-pages vs API-backed). It does not return structured company data.",
+        "resource": "Scraping",
+        "operation": "scrape",
+        "url": "={{ $fromAI('url','The portfolio/website URL to analyze','string') }}",
+        "useCustomBody": true,
+        "customBody": "{\"formats\": [\"markdown\", \"links\"], \"onlyMainContent\": true, \"timeout\": 30000}"
+      },
+      "type": "@mendable/n8n-nodes-firecrawl.firecrawlTool",
+      "typeVersion": 1,
+      "position": [
+        -340,
+        300
+      ],
+      "id": "agt-analyze",
+      "name": "analyze_page"
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Scrape ONE page and return its portfolio companies as structured JSON (name, domain, lookup_url). Use only when analyze_page already showed real company links present on a static or simple list page. Input: the page URL.",
+        "resource": "Scraping",
+        "operation": "scrape",
+        "url": "={{ $fromAI('url','The page URL to extract companies from','string') }}",
+        "useCustomBody": true,
+        "customBody": "{\"formats\": [{\"type\": \"json\", \"prompt\": \"Extract the firm's CURRENT portfolio companies. For each, the external website domain it links to (name optional). Only domains that literally appear as links. Exclude exited/prior/acquired companies, the firm's own domain, social links, and category labels.\", \"schema\": {\"type\": \"object\", \"properties\": {\"companies\": {\"type\": \"array\", \"items\": {\"type\": \"object\", \"properties\": {\"name\": {\"type\": \"string\"}, \"domain\": {\"type\": \"string\"}, \"lookup_url\": {\"type\": \"string\"}}}}}}}], \"onlyMainContent\": true, \"timeout\": 60000}"
+      },
+      "type": "@mendable/n8n-nodes-firecrawl.firecrawlTool",
+      "typeVersion": 1,
+      "position": [
+        -240,
+        300
+      ],
+      "id": "agt-scrape",
+      "name": "firecrawl_scrape_extract"
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Search the web and return matching pages with their content. Use to RESEARCH how to obtain a firm's portfolio data: find its backend API, API documentation, or a public data mirror. Input: a search query.",
+        "resource": "MapSearch",
+        "operation": "search",
+        "query": "={{ $fromAI('query','web search query to find the site data source or backend API or a public data mirror, for example FIRM portfolio api or SITE algolia','string') }}",
+        "limit": 8
+      },
+      "type": "@mendable/n8n-nodes-firecrawl.firecrawlTool",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        300
+      ],
+      "id": "agt-search",
+      "name": "web_search"
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Return the list of URLs on a website (URL discovery only, no company data). Use to find a firm's portfolio sub-pages: per-letter, by-batch, page 2/3, or per-company profile pages. Input: the firm root or index URL.",
+        "resource": "MapSearch",
+        "operation": "map",
+        "url": "={{ $fromAI('url','Firm root or index URL to map','string') }}",
+        "useCustomBody": true,
+        "customBody": "{\"limit\": 5000}"
+      },
+      "type": "@mendable/n8n-nodes-firecrawl.firecrawlTool",
+      "typeVersion": 1,
+      "position": [
+        60,
+        300
+      ],
+      "id": "agt-map",
+      "name": "firecrawl_map"
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Heavier scrape that renders JavaScript in a real browser with a stealth proxy, then extracts companies as JSON. Use SPARINGLY and only when analyze_page returned a JS shell / empty page, or the page was blocked (4xx/5xx/captcha). Input: the page URL.",
+        "resource": "Scraping",
+        "operation": "scrape",
+        "url": "={{ $fromAI('url','The URL to render (JS/blocked) and extract from','string') }}",
+        "useCustomBody": true,
+        "customBody": "{\"formats\": [{\"type\": \"json\", \"prompt\": \"Extract the firm's CURRENT portfolio companies. For each, the external website domain it links to (name optional). Only domains that literally appear as links. Exclude exited/prior/acquired companies, the firm's own domain, social links, and category labels.\", \"schema\": {\"type\": \"object\", \"properties\": {\"companies\": {\"type\": \"array\", \"items\": {\"type\": \"object\", \"properties\": {\"name\": {\"type\": \"string\"}, \"domain\": {\"type\": \"string\"}, \"lookup_url\": {\"type\": \"string\"}}}}}}}], \"proxy\": \"auto\", \"waitFor\": 3500, \"onlyMainContent\": false, \"timeout\": 90000}"
+      },
+      "type": "@mendable/n8n-nodes-firecrawl.firecrawlTool",
+      "typeVersion": 1,
+      "position": [
+        160,
+        300
+      ],
+      "id": "agt-render",
+      "name": "firecrawl_render"
+    },
+    {
+      "parameters": {
+        "toolDescription": "Make an HTTP request to a JSON API endpoint you discovered. No authentication is attached, so you supply the full URL, the headers, and the JSON body yourself (e.g. an Algolia queries endpoint with the search key in headers). ONLY for JSON API endpoints — NEVER fetch raw HTML pages with this. Inputs: http_method, url, headers_json, body_json. Probe totals with the SMALLEST page first (e.g. Algolia hitsPerPage=0; per_page=1) — read the total, then decide per THE ONE API RULE. Special characters in query params (GROQ, GraphQL, JSON) get MANGLED if baked into the url string — pass them via query_json (auto-encoded), or better, use POST with body_json where the API supports it.",
+        "method": "={{ $fromAI('http_method','HTTP method GET or POST','string', \"GET\") }}",
+        "url": "={{ $fromAI('url','The full absolute URL including https and the host, for example the Algolia queries endpoint you discovered','string') }}",
+        "authentication": "none",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ $fromAI('headers_json','All request headers as a JSON object written as a string, including any API key headers the site requires','string', \"{}\") }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $fromAI('body_json','The full request body as a JSON object written as a string; use an empty object for a GET request','string', \"{}\") }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 30000
+        },
+        "sendQuery": true,
+        "specifyQuery": "json",
+        "jsonQuery": "={{ $fromAI('query_json','Query-string parameters as a JSON object written as a string (e.g. {\\\"query\\\":\\\"*[0...3]{_type}\\\"}); they are URL-encoded automatically and appended to the url — when using this, the url must contain NO ? query string itself. Use {} for none.','string', \"{}\") }}"
+      },
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.4,
+      "position": [
+        260,
+        300
+      ],
+      "id": "agt-http",
+      "name": "http_request",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\"type\": \"object\", \"properties\": {\"strategy\": {\"type\": \"string\"}, \"companies\": {\"type\": \"array\", \"items\": {\"type\": \"object\", \"properties\": {\"name\": {\"type\": \"string\"}, \"domain\": {\"type\": \"string\"}, \"lookup_url\": {\"type\": \"string\"}, \"source_url\": {\"type\": \"string\"}}}}, \"page_urls\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}}, \"estimated_count\": {\"type\": \"number\"}, \"archetype\": {\"type\": \"string\"}, \"tools_used\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}}, \"escalated\": {\"type\": \"boolean\"}, \"confidence\": {\"type\": \"number\"}, \"notes\": {\"type\": \"string\"}, \"crawl_url\": {\"type\": \"string\"}, \"path_hint\": {\"type\": \"string\"}}, \"required\": [\"strategy\"]}",
+        "autoFix": true
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        560,
+        300
+      ],
+      "id": "agt-parser",
+      "name": "Structured Output Parser"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "claude-opus-4-6",
+          "cachedResultName": "Claude Opus 4.6"
+        },
+        "options": {
+          "maxTokensToSample": 16384
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.5,
+      "position": [
+        560,
+        480
+      ],
+      "id": "agt-fixmodel",
+      "name": "Autofix Model"
+    },
+    {
+      "parameters": {
+        "jsCode": "const it = $input.first().json || {};\nlet o = (it.output !== undefined && it.output !== null) ? it.output : it;\nif (typeof o === \"string\") { try { o = JSON.parse(o); } catch(e){ const m = o.match(/\\{[\\s\\S]*\\}/); try { o = m ? JSON.parse(m[0]) : null; } catch(e2){ o = null; } } }\nif (!o || typeof o !== \"object\") o = {};\nconst VALID = new Set([\"inline\",\"api\",\"paginated\",\"crawl\",\"giant_flag\",\"review\"]);\n// Parse failure / unknown strategy -> human review, NOT the harvester (giant_flag must be an explicit verdict).\nlet strategy = VALID.has(o.strategy) ? o.strategy : \"review\";\nlet reason = VALID.has(o.strategy) ? \"\" : (\"unparseable/unknown strategy: \" + String(o.strategy || \"(missing)\"));\nlet companies = Array.isArray(o.companies) ? o.companies.filter(function(c){ return c && typeof c === \"object\"; }) : [];\nlet page_urls = (Array.isArray(o.page_urls) ? o.page_urls : []).filter(function(u){ return typeof u === \"string\" && /^https?:\\/\\//i.test(u); });\nlet crawl_url = (typeof o.crawl_url === \"string\" && /^https?:\\/\\//i.test(o.crawl_url.trim())) ? o.crawl_url.trim() : \"\";\nlet truncated_pages = false;\n// v3 (A1): STRATEGY-PAYLOAD COHERENCE — a valid strategy with an unusable payload must never reach an executor.\nif (strategy === \"crawl\" && !crawl_url) { strategy = \"review\"; reason = \"strategy=crawl but no usable crawl_url\"; }\nif (strategy === \"paginated\") {\n  if (page_urls.length === 0) { strategy = \"review\"; reason = \"strategy=paginated but no usable page_urls\"; }\n  else if (page_urls.length > 60) { truncated_pages = true; page_urls = page_urls.slice(0, 60); }\n}\nif ((strategy === \"inline\" || strategy === \"api\") && companies.length === 0) { strategy = \"review\"; reason = \"strategy=\" + String(o.strategy) + \" but companies is empty\"; }\n// v3 (D8): implausible volume from a scraped-page strategy is a red flag (prompt-injection / runaway), not data.\nif (companies.length > 500) { strategy = \"review\"; reason = \"implausible companies count: \" + companies.length + \" (cap 500)\"; companies = []; }\n// v3.5: SELF-CONFESSED PARTIAL (Abstract case) — agent returned a 5-company sample with estimated_count 250.\n// If the inline/api payload is less than HALF the agent's own estimate, it sampled: review, never a write.\n// Threshold 25% (not 50%): estimated_count = TOTAL directory size BEFORE exited-exclusions (defined in\n// the prompt), so honest high-exit funds (observed: 9-34% exited; allow up to ~75%) must not trip this.\n// The real failure shape is extreme (5 of 250 = 2%), not borderline.\nif ((strategy === \"inline\" || strategy === \"api\") && typeof o.estimated_count === \"number\" && o.estimated_count > 0\n    && companies.length < Math.max(5, Math.ceil(o.estimated_count * 0.25))) {\n  strategy = \"review\";\n  reason = \"partial \" + String(o.strategy) + \" payload: \" + companies.length + \" companies vs agent's own estimated_count \" + o.estimated_count + \" — sample returned as if complete\";\n}\n// v3.19: names-only payload (text-only / Framer portfolios, e.g. Altos) — an inline/api result\n// where NO company has a domain OR a lookup_url. The resolvers can act on neither, so without this every\n// company drops in Parse harvest and the run is mislabeled \"no_new\". Route to review with an honest reason.\n// (No name-search: generic names like Self / Path / Channel / SODA would mis-resolve.)\nif ((strategy === \"inline\" || strategy === \"api\") && companies.length > 0) {\n  var _resolvable = 0;\n  for (var _i = 0; _i < companies.length; _i++) {\n    var _c = companies[_i] || {};\n    var _d = (typeof _c.domain === \"string\") ? _c.domain.trim() : \"\";\n    var _lu = (typeof _c.lookup_url === \"string\") ? _c.lookup_url.trim() : \"\";\n    if (_d || _lu) { _resolvable++; }\n  }\n  if (_resolvable === 0) {\n    strategy = \"review\";\n    reason = \"names-only payload: \" + companies.length + \" companies, none with a domain or lookup_url on the page (text-only/Framer portfolio) — needs an alternate domain source; not name-searched per policy\";\n  }\n}\nreturn [{ json: {\n  strategy: strategy,\n  companies: companies,\n  page_urls: page_urls,\n  crawl_url: crawl_url,\n  path_hint: (typeof o.path_hint === \"string\") ? o.path_hint.trim() : \"\",\n  estimated_count: (typeof o.estimated_count === \"number\") ? o.estimated_count : null,\n  _agent_archetype: o.archetype || \"\", _agent_notes: o.notes || \"\",\n  _agent_escalated: !!o.escalated, _agent_confidence: o.confidence, _agent_tools: o.tools_used || [],\n  _raw_strategy: o.strategy || \"(missing)\",\n  _reason: reason,\n  _page_urls_truncated: truncated_pages\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        160,
+        0
+      ],
+      "id": "agt-readplan",
+      "name": "Read plan"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.strategy }}",
+                    "rightValue": "paginated",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "paginated"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.strategy }}",
+                    "rightValue": "giant_flag",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "giant_flag"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.strategy }}",
+                    "rightValue": "crawl",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "crawl"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.strategy }}",
+                    "rightValue": "review",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "review"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        360,
+        0
+      ],
+      "id": "agt-route",
+      "name": "Route strategy"
+    },
+    {
+      "parameters": {
+        "jsCode": "const c = Array.isArray($json.companies) ? $json.companies : [];\nreturn [{ json: { content: JSON.stringify({ companies: c }),\n  _strategy: $json.strategy||\"\", _agent_notes: $json._agent_notes||\"\", _agent_tools: $json._agent_tools||[] } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        620,
+        -220
+      ],
+      "id": "agt-adapt",
+      "name": "Adapt companies"
+    },
+    {
+      "parameters": {
+        "jsCode": "const out = [];\nfor (const it of $input.all()){ const urls = Array.isArray(it.json.page_urls)?it.json.page_urls:[];\n  for (const u of urls){ if (u && typeof u === \"string\") out.push({ json: { url: u } }); } }\nreturn out.length ? out : [{ json: { url: \"\" } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        620,
+        40
+      ],
+      "id": "agt-split",
+      "name": "Split page URLs"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.firecrawl.dev/v2/scrape",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "firecrawlApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"url\": \"{{ $json.url }}\", \"onlyMainContent\": true, \"timeout\": 60000, \"formats\": [{\"type\": \"json\", \"prompt\": \"Extract the firm's CURRENT portfolio companies. For each, the external website domain it links to (name optional). Only domains that literally appear as links. Exclude exited/prior/acquired companies, the firm's own domain, social links, and category labels.\", \"schema\": {\"type\": \"object\", \"properties\": {\"companies\": {\"type\": \"array\", \"items\": {\"type\": \"object\", \"properties\": {\"name\": {\"type\": \"string\"}, \"domain\": {\"type\": \"string\"}, \"lookup_url\": {\"type\": \"string\"}}}}}}}]}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 3,
+              "batchInterval": 1200
+            }
+          },
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        820,
+        40
+      ],
+      "id": "agt-scrapepage",
+      "name": "Scrape page (batched)",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "let all = []; let failed = 0;\nfor (const it of $input.all()){ const j=it.json||{}; const resp=(j.body!==undefined&&j.body!==null)?j.body:j;\n  const data=(resp&&resp.data)||{}; const ex=data.json||{}; const cos=Array.isArray(ex.companies)?ex.companies:[];\n  if(!Array.isArray(ex.companies)) failed++;      // v3 (B2): a page that returned no extraction is a FAILURE to count, not to hide\n  for (const c of cos){ if (c&&typeof c===\"object\") all.push(c); } }\nreturn [{ json: { content: JSON.stringify({ companies: all }), _strategy:\"paginated\", _pages: $input.all().length, _failed_pages: failed } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1020,
+        40
+      ],
+      "id": "agt-collect",
+      "name": "Collect companies"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ───────────────────────────────────────────────────────────────────────────\n// Parse harvest — n8n Code node (\"Run Once for All Items\")\n// Parses the LLM-harvest output (current companies only), dedups vs known +\n// within-run, then builds the resolve-prompt chunks the \"Claude resolve\" node\n// expects. So the LLM harvest does the JUDGMENT (current vs exited/acquired) and\n// resolve does the FETCH/canonicalize (rebrand/redirect + fills missing names).\n//\n// 2026-06-04 changes (Ethan):\n//   - NAME-OPTIONAL harvest: a company may arrive with name \"\" (domain-only\n//     listings like B Capital). Carry it through; resolve fills the name.\n//   - Do NOT fall back to source_url for the domain (source_url is the VC's own\n//     page -> would map to vc_domain and get dropped). Domain comes from harvest.\n//   - Carry {source_url, name, domain} into each chunk as `_fallback` so\n//     \"Parse Claude\" can fall back to the harvested domain if resolve misses\n//     (no more silent drops when resolve returns empty).\n//   <3 net-new -> quarantine.\n// 2026-06-07 changes (Ethan): ARTICLE-LINK CASE (Footwork). A company may arrive\n//   with domain \"\" + lookup_url=<an on-page newsletter/blog article about it>.\n//   Kept as a SEPARATE \"lookup\" track; resolve fetches the article to recover the\n//   real domain. GUARDRAILS so this NEVER loosens the already-good path:\n//     * Direct entries (own-site domain) take the existing path UNCHANGED — same\n//       dedup, same {source_url,name,domain} shape. lookup is only the ELSE branch\n//       (fills a gap; can never override or degrade a real domain).\n//     * A lookup_url is accepted ONLY if its host is in CONTENT_HOSTS (known\n//       newsletter/blog platforms). News/social/other links stay dropped exactly\n//       as before — the model proposes, this gate decides.\n//     * Lookup dedup is by full article URL (NOT by name -> avoids generic-name\n//       collisions); known-domain dedup happens post-resolve in Parse Claude.\n//     * Directs are chunked FIRST, lookups after, so direct-only chunks get the\n//       byte-identical original resolve prompt (extended prompt only when a chunk\n//       actually contains a lookup item).\n// ───────────────────────────────────────────────────────────────────────────\nfunction normalizeDomain(d){ if(!d||typeof d!==\"string\") return \"\"; return d.toLowerCase().trim().replace(/^https?:\\/\\//,\"\").replace(/^www\\./,\"\").replace(/[\\/?#].*$/,\"\"); }\nfunction registrableDomain(d){ const n=normalizeDomain(d); if(!n) return \"\"; const p=n.split(\".\"); if(p.length<=2) return n; const last2=p.slice(-2).join(\".\"); const COMPOUND=[\"co.uk\",\"org.uk\",\"ac.uk\",\"gov.uk\",\"co.kr\",\"com.br\",\"com.au\",\"co.jp\",\"co.il\",\"co.za\",\"co.nz\",\"com.mx\",\"co.in\",\"com.sg\",\"com.tr\",\"com.cn\",\"com.hk\",\"co.th\",\"com.tw\",\"com.co\"]; return (COMPOUND.indexOf(last2)>-1 && p.length>=3)?p.slice(-3).join(\".\"):last2; }\nfunction normalizeName(name){ if(!name||typeof name!==\"string\") return \"\"; let s=name.toLowerCase().trim(); s=s.replace(/[.,]?\\s+(inc|llc|ltd|limited|corp|corporation|co|gmbh|sa|ag|plc|pte|bv)\\.?$/i,\"\"); return s.replace(/[^a-z0-9]/g,\"\"); }\nfunction cleanUrl(u){ if(!u||typeof u!==\"string\") return null; let s=u.trim(); const m=s.match(/https?:\\/\\/[^\\s)\\]]+/i); if(m) s=m[0]; if(s===\"\"||s===\"/\"||s.indexOf(\"#\")===0||/^(javascript|mailto|tel):/i.test(s)) return null; if(/^https?:\\/\\//i.test(s)) return /^https?:\\/\\/[^\\/\\s]+\\.[a-z]{2,}/i.test(s)?s:null; return /^[^\\/\\s]+\\.[a-z]{2,}/i.test(s)?(\"https://\"+s):null; }\nconst BLOCK = new Set([\"firecrawl.dev\",\"linkedin.com\",\"twitter.com\",\"x.com\",\"facebook.com\",\"instagram.com\",\"threads.net\",\"crunchbase.com\",\"youtube.com\",\"pitchbook.com\",\"bloomberg.com\",\"wikipedia.org\",\"g2.com\",\"github.com\",\"medium.com\",\"apps.apple.com\",\"play.google.com\",\"squarespace.com\",\"squarespace-cdn.com\",\"onetrust.com\",\"cloudfront.net\",\"cloudinary.com\",\"akamaized.net\"]);\n// Newsletter/blog platforms a portfolio page may link a company's spotlight post to,\n// instead of the company's own site. ONLY these hosts may become a lookup_url entry.\n// (Extend as you encounter more.) News/other hosts stay dropped as before.\nconst CONTENT_HOSTS = new Set([\"substack.com\",\"medium.com\",\"beehiiv.com\",\"ghost.io\",\"wordpress.com\",\"mirror.xyz\",\"notion.site\",\"hashnode.dev\"]);\nconst cfg = $('Build config').first().json;\nconst vcDom = registrableDomain(cfg.vc_domain);\nconst knownNames = new Set(cfg.known_names || []);\nconst knownDomains = new Set(cfg.known_domains || []);\nfunction llmText(resp){ const r=resp||{}; let c=null;\n  if(r.choices&&r.choices[0]&&r.choices[0].message) c=r.choices[0].message.content;\n  if(c==null&&r.message) c=(typeof r.message.content!==\"undefined\")?r.message.content:r.message;\n  if(c==null&&typeof r.content!==\"undefined\") c=r.content;\n  if(c==null&&typeof r.text!==\"undefined\") c=r.text;\n  if(c==null&&typeof r.output_text!==\"undefined\") c=r.output_text;\n  if(Array.isArray(c)) c=c.map(function(b){return (b&&typeof b.text===\"string\")?b.text:(typeof b===\"string\"?b:\"\");}).join(\" \");   // text blocks only; ignore tool_use/tool_result\n  if(c&&typeof c===\"object\") c=c.text||c.content||JSON.stringify(c);\n  return (typeof c===\"string\")?c:(c!=null?String(c):\"\"); }\nfunction parseCompanies(txt){ if(!txt) return []; let o=null; try{o=JSON.parse(txt);}catch(e){ const m=txt.match(/\\{[\\s\\S]*\\}/); if(m){try{o=JSON.parse(m[0]);}catch(e2){}} } if(o&&Array.isArray(o.companies)) return o.companies; if(Array.isArray(o)) return o; return []; }\n\n// v3.12 ROSTER MODE: the crawl branch now ships the status-filtered CURRENT roster ('Crawl -> companies').\n// Roster profile-page lookups ARE the population — never drop them via the scarce-directs gate.\nlet isRoster = false, rosterNote = \"\";\ntry { const f0 = $input.first().json || {}; isRoster = !!f0._roster; rosterNote = f0._roster_note || \"\"; } catch (e) {}\nconst seenD = new Set(knownDomains), seenLU = new Set();   // (dead seenN removed in v3.10 — name arm gone since v2)\nconst directs = [], lookups = [], vcLookups = []; let proposed = 0;\nfor (const it of $input.all()){\n  for (const c of parseCompanies(llmText(it.json||{}))){\n    if(!c || typeof c !== \"object\") continue;\n    proposed++;\n    const dom = registrableDomain(cleanUrl(c.domain) || c.domain || \"\");   // domain ONLY from harvest's domain field\n    const name = c.name ? String(c.name).trim() : \"\";\n    const n = normalizeName(name);\n    if(dom && dom!==vcDom && !BLOCK.has(dom)){                             // DIRECT — existing path, UNCHANGED\n      if(seenD.has(dom)) continue;                                         // dedup vs known + within-run — DOMAIN ONLY (QA#1: the name arm silently dropped same-name distinct cos, e.g. joinuplift.co vs uplift.com)\n      seenD.add(dom);\n      directs.push({ source_url: \"https://\"+dom, name: name, domain: dom });  // name may be \"\"\n      continue;\n    }\n    // LOOKUP CASE (v3.8): no usable own-site domain. Accept a lookup if there is a NAME and the link is\n    // (a) a content-platform article (CONTENT_HOSTS — Footwork case), OR (b) the FIRM'S OWN profile page\n    // (Dawn case) — the PROMPT now forbids shape (b), but if the agent emits it anyway the resolver\n    // recovers the real domains instead of the run dying as a mislabeled no_new. Full-URL keying.\n    const lu = cleanUrl(c.lookup_url || \"\") || \"\";\n    const luReg = registrableDomain(lu);\n    if(name && lu && (CONTENT_HOSTS.has(luReg) || luReg === vcDom)){\n      const luKey = lu.toLowerCase().replace(/\\/+$/,\"\");\n      if(seenLU.has(luKey)) continue;                                       // within-run dedup by full lookup URL\n      seenLU.add(luKey);\n      (luReg === vcDom ? vcLookups : lookups).push({ source_url: lu, name: name, domain: \"\", lookup_url: lu });\n      continue;\n    }\n    // else: not an own-site domain and not a content-host article -> drop (as before)\n  }\n}\n// v3.10: vcDom profile-page lookups are a FALLBACK for pages that exposed no real domains (Dawn inline\n// case: 0 directs). In CRAWL runs the index page emits the same companies as vc-lookups while the profile\n// pages emit them as directs — resolving both doubles cost for zero new rows (Parse Claude's seenD already\n// deduped the output). So: use vc-lookups ONLY when directs are scarce. Article lookups are ALWAYS used.\nconst usableLookups = (isRoster || directs.length < 3) ? lookups.concat(vcLookups) : lookups;   // v3.12: roster lookups are first-class\nconst entries = directs.concat(usableLookups);   // directs first -> direct-only chunks keep the original resolve prompt\nif(entries.length < 3){\n  let failedPages = 0; try { failedPages = ($input.first().json || {})._failed_pages || 0; } catch(e) {}\n  const healthy = proposed >= 10;   // v3 (D9): many proposed but all already known = healthy no_new (memory-layer re-runs), not a failure\n  return [{ json: { vc_account_id: cfg.vc_account_id, vc_name: cfg.vc_name, vc_domain: cfg.vc_domain, _quarantine: true,\n    _verdict: healthy ? \"no_new\" : \"review\",\n    _reason: (healthy ? \"no_new — all proposed companies already known. \" : \"\") + \"LLM harvest net-new current: \"+entries.length+\" (proposed by LLM: \"+proposed+\"; direct: \"+directs.length+\", lookup: \"+usableLookups.length+(vcLookups.length && directs.length >= 3 ? (\"; vc-profile lookups dropped as direct-dups: \"+vcLookups.length) : \"\")+(failedPages ? (\"; FAILED PAGES: \"+failedPages) : \"\")+\")\"+(rosterNote ? (\" | \"+rosterNote) : \"\") } }];\n}\nconst CHUNK = 5; const out = [];\nfor (let i=0;i<entries.length;i+=CHUNK){\n  const chunk = entries.slice(i,i+CHUNK);\n  const listed = chunk.map(function(e,j){\n    if(e.lookup_url){\n      return (j+1)+\". \"+e.source_url+\"   (PROFILE/ARTICLE page about the company \\\"\"+e.name+\"\\\" — fetch it and return THAT company's official website domain, NOT this page's host)\";\n    }\n    return (j+1)+\". \"+e.source_url+(e.name?(\"   (listed name: \"+e.name+\")\"):\"   (no name on page)\");\n  }).join(\"\\n\");\n  const hasLookup = chunk.some(function(e){ return !!e.lookup_url; });\n  const prompt = hasLookup\n    ? (\"You have a web_fetch tool. For EACH url below: FETCH it (follow redirects) and read the page.\\n\"+\n       \"- If the item is a company website, return the company's real NAME and its final canonical DOMAIN after any redirect. If a listed name is given, verify/correct it from the page; if no name is given, get the name from the page.\\n\"+\n       \"- If the item is marked as a PROFILE/ARTICLE page about a named company, that url is NOT the company's site (it is the investor's own profile page for the company, or a newsletter/blog post). Read it, find the company's OWN official website linked in it, and return that company's canonical DOMAIN. You MAY fetch that one company website to confirm. Do NOT return the page's own host (e.g. the VC's domain, substack.com, medium.com). STATUS CHECK for PROFILE pages: if the profile page clearly marks the company as acquired / merged / exited / no longer active, or shows a public stock ticker (e.g. 'NASDAQ: X', '1801.HK'), it is NOT a current portfolio company — return an empty domain for that item.\\n\"+\n       \"Only fetch the urls listed (and, for an ARTICLE item, the one company website you find linked in it) — do not otherwise search the web. If a url is dead or you cannot determine a real company website, return an empty domain.\\n\\nURLs:\\n\"+listed+\"\\n\\nReturn source_url EXACTLY as given for each. Respond ONLY as compact JSON: {\\\"companies\\\":[{\\\"source_url\\\":\\\"...\\\",\\\"name\\\":\\\"...\\\",\\\"domain\\\":\\\"...\\\"}]}.\")\n    : (\"You have a web_fetch tool. For EACH url below: FETCH it (follow redirects) and read the page, then return the company's real NAME and its final canonical DOMAIN after any redirect. If a listed name is given, verify/correct it from the page; if no name is given, get the name from the page. Only fetch the urls listed — do not fetch anything else. If a url is dead or clearly not a real company website, return an empty domain.\\n\\nURLs:\\n\"+listed+\"\\n\\nReturn source_url EXACTLY as given for each. Respond ONLY as compact JSON: {\\\"companies\\\":[{\\\"source_url\\\":\\\"...\\\",\\\"name\\\":\\\"...\\\",\\\"domain\\\":\\\"...\\\"}]}.\");\n  out.push({ json: { vc_account_id: cfg.vc_account_id, vc_name: cfg.vc_name, vc_domain: cfg.vc_domain, _quarantine: false, chunk_index: Math.floor(i/CHUNK), _llm_prompt: prompt, _fallback: chunk } });\n}\nreturn out;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1240,
+        0
+      ],
+      "id": "parseharvest",
+      "name": "Parse harvest"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json._quarantine }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        0
+      ],
+      "id": "ifq",
+      "name": "Quarantine?"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1660,
+        -220
+      ],
+      "id": "review",
+      "name": "Flagged for review"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: \"claude-opus-4-7\", max_tokens: 8000, messages: [ { role: \"user\", content: $json._llm_prompt } ] }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1660,
+        160
+      ],
+      "id": "effca99c-7950-4f2d-b311-b56d3b3bf899",
+      "name": "Claude verdict",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 10000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "function normDom(d){ if(!d||typeof d!==\"string\") return \"\"; return d.toLowerCase().trim().replace(/^https?:\\/\\//,\"\").replace(/^www\\./,\"\").replace(/[\\/?#].*$/,\"\"); }\nfunction regDom(d){ const n=normDom(d); if(!n) return \"\"; const p=n.split(\".\"); if(p.length<=2) return n; const last2=p.slice(-2).join(\".\"); const C=[\"co.uk\",\"org.uk\",\"ac.uk\",\"gov.uk\",\"co.kr\",\"com.br\",\"com.au\",\"co.jp\",\"co.il\",\"co.za\",\"co.nz\",\"com.mx\",\"co.in\",\"com.sg\",\"com.tr\",\"com.cn\",\"com.hk\",\"co.th\",\"com.tw\",\"com.co\"]; return (C.indexOf(last2)>-1&&p.length>=3)?p.slice(-3).join(\".\"):last2; }\nfunction hostReg(u){ const m=String(u||\"\").toLowerCase().match(/^[a-z][a-z0-9+.-]*:\\/\\/([^\\/?#]*)/); return m?regDom(m[1]):\"\"; }\nfunction fullKey(u){ let s=String(u||\"\").toLowerCase().trim(); s=s.replace(/^https?:\\/\\//,\"\").replace(/^www\\./,\"\").replace(/[?#].*$/,\"\").replace(/\\/+$/,\"\"); return s; }\nfunction cleanUrl(u){ if(!u||typeof u!==\"string\") return null; let s=u.trim(); const m=s.match(/https?:\\/\\/[^\\s)\\]]+/i); if(m) s=m[0]; if(s===\"\"||s===\"/\"||s.indexOf(\"#\")===0||/^(javascript|mailto|tel):/i.test(s)) return null; if(/^https?:\\/\\//i.test(s)) return /^https?:\\/\\/[^\\/\\s]+\\.[a-z]{2,}/i.test(s)?s:null; return /^[^\\/\\s]+\\.[a-z]{2,}/i.test(s)?(\"https://\"+s):null; }\nvar BLOCK=new Set([\"linkedin.com\",\"twitter.com\",\"x.com\",\"facebook.com\",\"instagram.com\",\"threads.net\",\"youtube.com\",\"tiktok.com\",\"t.me\",\"discord.gg\",\"discord.com\",\"reddit.com\",\"crunchbase.com\",\"pitchbook.com\",\"wikipedia.org\",\"g2.com\",\"github.com\",\"apps.apple.com\",\"play.google.com\",\"firecrawl.dev\",\"substack.com\",\"medium.com\",\"beehiiv.com\",\"ghost.io\",\"wordpress.com\",\"mirror.xyz\",\"notion.site\",\"hashnode.dev\",\"squarespace.com\",\"squarespace-cdn.com\",\"onetrust.com\",\"cloudfront.net\",\"cloudinary.com\",\"akamaized.net\",\"gravatar.com\",\"w.org\",\"plasmic.app\",\"techcrunch.com\",\"forbes.com\",\"bloomberg.com\",\"businesswire.com\",\"prnewswire.com\",\"globenewswire.com\",\"statnews.com\",\"fiercebiotech.com\",\"fiercehealthcare.com\",\"reuters.com\",\"wsj.com\",\"nytimes.com\",\"vogue.com\",\"time.com\",\"inc.com\",\"fastcompany.com\",\"today.com\",\"newsweek.com\"]);\nvar CONTENT_HOSTS=new Set([\"substack.com\",\"medium.com\",\"beehiiv.com\",\"ghost.io\",\"wordpress.com\",\"mirror.xyz\",\"notion.site\",\"hashnode.dev\"]);\nfunction llmText(resp){ const r=resp||{}; let c=null; if(r.choices&&r.choices[0]&&r.choices[0].message) c=r.choices[0].message.content; if(c==null&&r.message) c=(typeof r.message.content!==\"undefined\")?r.message.content:r.message; if(c==null&&typeof r.content!==\"undefined\") c=r.content; if(c==null&&typeof r.text!==\"undefined\") c=r.text; if(Array.isArray(c)) c=c.map(function(b){return (b&&typeof b.text===\"string\")?b.text:(typeof b===\"string\"?b:\"\");}).join(\" \"); if(c&&typeof c===\"object\") c=c.text||c.content||JSON.stringify(c); return (typeof c===\"string\")?c:(c!=null?String(c):\"\"); }\nfunction parseCompanies(txt){ if(!txt) return []; let o=null; try{o=JSON.parse(txt);}catch(e){ const m=txt.match(/\\{[\\s\\S]*\\}/); if(m){try{o=JSON.parse(m[0]);}catch(e2){}} } if(o&&Array.isArray(o.companies)) return o.companies; if(Array.isArray(o)) return o; return []; }\nfunction assembleRows(fbArr, verdictItems, cfg, knownDomains){\n  const vcDom=regDom(cfg.vc_domain);\n  const lookupSet=new Set(); for(const e of fbArr){ if(e&&e.lookup_url){const fk=fullKey(e.lookup_url); if(fk) lookupSet.add(fk);} }\n  function keyOf(u){ const fk=fullKey(u); if(lookupSet.has(fk)) return \"LU|\"+fk; return regDom(cleanUrl(u)||u||\"\"); }\n  const verd={};\n  for(const it of verdictItems){ for(const c of parseCompanies(llmText(it.json!==undefined?it.json:it))){ if(!c||typeof c!==\"object\")continue; const key=keyOf(c.source_url); if(!key)continue; const dom=regDom(cleanUrl(c.domain)||c.domain||\"\"); if(!verd[key]) verd[key]={domain:dom,keep:(c.keep!==false),status:(c.status||\"\")}; } }\n  const fb={};\n  for(const e of fbArr){ const isLU=!!(e&&e.lookup_url); const key=isLU?keyOf(e.lookup_url):regDom(cleanUrl(e.source_url)||e.source_url||e.domain||\"\"); if(!key)continue; if(!fb[key]) fb[key]={name:(e.name||\"\"),domain:regDom(e.domain||\"\")}; }\n  const out=[]; const seen=new Set(knownDomains||[]);\n  for(const key of Object.keys(fb)){\n    const f=fb[key]; const v=verd[key]||null;\n    if(v && v.keep===false) continue;\n    let domain=(v&&v.domain&&v.domain!==vcDom&&!BLOCK.has(v.domain)&&!CONTENT_HOSTS.has(v.domain))?v.domain:f.domain;\n    if(!domain||domain===vcDom||BLOCK.has(domain)||CONTENT_HOSTS.has(domain)) continue;\n    if(seen.has(domain)) continue; seen.add(domain);\n    out.push({ portco_name:(f.name||null), url:\"https://\"+domain, domain:domain, _resolved_via:(v?(\"claude-verdict-\"+(v.status||\"current\")):\"direct-or-fallback\") });\n  }\n  return out;\n}\n\n// ── Parse Claude (v3.18) — fallback from BOTH Profiles → domains (mined lookups; pushed first so it wins)\n//    and Parse harvest (directs + names). Direct-domain firms (inline shape, e.g. Abstract) skip the\n//    profile scrape (the IF 'Profiles to scrape?' routes them straight here), so their domains come from\n//    Parse harvest and the Claude verdict ($input) is empty for them -> they pass through kept.\nconst cfg=$('Build config').first().json;\nconst knownDomains=new Set(cfg.known_domains||[]);\nconst fbArr=[];\ntry{ for(const it of $('Profiles → domains').all()){ const a=(it.json&&it.json._fallback)?it.json._fallback:[]; for(const e of a) fbArr.push(e); } }catch(err){}\ntry{ for(const it of $('Parse harvest').all()){ const a=(it.json&&it.json._fallback)?it.json._fallback:[]; for(const e of a) fbArr.push(e); } }catch(err){}\nconst rows=assembleRows(fbArr, $input.all(), cfg, Array.from(knownDomains));\nreturn rows.map(function(r){ return { json: { vc_account_id:cfg.vc_account_id, vc_name:cfg.vc_name, vc_domain:cfg.vc_domain, portco_name:r.portco_name, url:r.url, domain:r.domain, _resolved_via:r._resolved_via } }; });\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1860,
+        160
+      ],
+      "id": "parseclaude",
+      "name": "Parse Claude"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.clay.com/v3/sources/webhook/YOUR-WEBHOOK-ID",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ vc_account_id: $json.vc_account_id, vc_name: $json.vc_name, vc_domain: $json.vc_domain, portco_name: $json.portco_name, url: $json.url, domain: $json.domain }) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2060,
+        160
+      ],
+      "id": "c994bdc6-88e4-4ef2-8a45-7e22c1c7e92c",
+      "name": "Write to Portco Staging",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst sd = $getWorkflowStaticData('global');\nconst cfg = ($('Build config').first() || {json:{}}).json || {};\nlet idx = {}; try { idx = ($('Parse index pick').first() || {json:{}}).json || {}; } catch(e) {}\nconst directoryUrl = idx.index_url || (cfg.vc_domain ? ('https://' + String(cfg.vc_domain).replace(/^https?:\\/\\//,'')) : (idx.vc_domain || ''));\nconst PROMPT =\n\"You are a portfolio-extraction engineer. Return the COMPLETE list of the firm's CURRENT portfolio companies from the directory at \" + directoryUrl + \" as JSON. Decide everything at runtime; do NOT assume any site-specific format.\\n\\n\" +\n\"You have two tools: code_execution (a Python sandbox with NO internet of its own) and http_request (an ASYNC function you call FROM your Python code to make any HTTP request; it returns a JSON string {\\\"status\\\":number,\\\"headers\\\":{selected response headers},\\\"body\\\":<parsed JSON or text>}). You MAY call http_request CONCURRENTLY with asyncio.gather in batches of up to ~75 calls — one batch completes in one round trip, so batching is the ONLY fast way to fetch many items. (Drop to ~20 per batch only if individual responses are large, >100KB each.)\\n\\n\" +\n\"Steps:\\n\" +\n\"1. Call http_request from code to GET \" + directoryUrl + \" and inspect the raw HTML/JS to discover the backend API that actually serves the companies (e.g. an Algolia applicationId + search-only apiKey + index name, a __NEXT_DATA__ blob, or any JSON/search endpoint). On WordPress sites (wp-json / api.w.org present): GET /wp-json/ (the REST ROOT) and check its custom namespaces (e.g. firm/v1) — custom routes like get-companies / get-company-content usually expose fields the generic wp/v2 API lacks.\\n\" +\n\"2. In code, query that API and PAGINATE / FACET through EVERY page until exhausted. CRITICAL FOR SPEED: probe with the smallest page first to read the reported total (hitsPerPage=0, per_page=1, or the X-WP-Total / X-WP-TotalPages response headers), then request the LARGEST page size the API allows (Algolia hitsPerPage=1000; WordPress per_page=100) and fetch all remaining pages CONCURRENTLY with asyncio.gather. Every batch is one slow round-trip, so use the fewest batches possible.\\n\" +\n\"3. If the list data lacks each company's EXTERNAL website, look for a per-item detail/content endpoint (e.g. get-company-content?id=X) and — ONLY when the total is known and <= ~1000 — fetch ALL items in concurrent batches of ~75, parsing out the external website (the first non-social external href) and any status field. EXCLUDE companies whose status marks them exited/acquired/prior whenever a status field exists anywhere in the data. When filtering social/own-domain hosts, ALWAYS compare PARSED hostnames by equality or dot-suffix (urlparse(u).netloc), NEVER by substring — 'x.com' in 'idrx.com' is the classic bug.\\n\" +\n\"4. Deduplicate by WEBSITE/URL — never by name alone (distinct companies share names). Keep only company name + external website. Exclude the firm itself, social/login/jobs links, and category labels.\\n\" +\n\"5. HONEST FALLBACK: if after checking custom namespaces and detail endpoints there is genuinely NO external-website source anywhere, do NOT put the firm's own URLs in 'website'. Return each company as {'name': ..., 'website': '', 'profile_url': <the firm's own page for that company>} and state in ONE sentence that the site publishes no external sites.\\n\" +\n\"6. Do ALL fetching/pagination/parsing/dedup INSIDE the sandbox via http_request. Never print raw pages or progress totals as your result.\\n\" +\n\"7. FINAL OUTPUT (critical, the only thing that matters): once you have EVERY company, make ONE final print of the COMPLETE list, exactly:\\n\" +\n\"   print('RESULT_JSON:' + json.dumps({'companies': companies, 'count': len(companies)}))\\n\" +\n\"   Each company is {'name':..., 'website':...} (plus 'profile_url' when website is empty). `companies` must contain EVERY company you collected (do NOT summarize, sample, truncate, or print just a count). Keep any prose reply to one short sentence.\";\nlet HINT = \"\";\ntry {\n  const plan = ($('Read plan').first() || {json:{}}).json || {};\n  if (plan._agent_notes) HINT = \"\\n\\nANALYST HINT from the discovery agent (it already inspected this page; verify before trusting, fall back to your own discovery if it is wrong): \" + String(plan._agent_notes).slice(0, 2000);\n} catch(e) {}\n// v3 (A5): state is scoped PER EXECUTION — concurrent VC runs no longer collide on sd.messages.\nsd.runs = sd.runs || {};\nconst rk = Object.keys(sd.runs);\nif (rk.length > 10) { rk.sort(function(a,b){ return String((sd.runs[a]||{})._ts||'').localeCompare(String((sd.runs[b]||{})._ts||'')); }); for (const k of rk.slice(0, rk.length - 10)) delete sd.runs[k]; }\nsd.runs[$execution.id] = { _ts: new Date().toISOString(), messages: [{ role: \"user\", content: PROMPT + HINT }], container: null, done: false, final: null, round: 0, retries: 0 };\nreturn [{ json: { started: true, directoryUrl: directoryUrl, _exec: $execution.id } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        200
+      ],
+      "id": "ptc-init",
+      "name": "Init state"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst sd = $getWorkflowStaticData('global');\nconst S = (sd.runs || {})[$execution.id] || { messages: [] };\nconst tools = [\n  { type: \"code_execution_20260120\", name: \"code_execution\" },\n  {\n    name: \"http_request\",\n    description: \"Make an HTTP request and return the response. Call this from your Python code — it is an ASYNC function: await it, and use asyncio.gather to run up to ~75 calls concurrently in one batch (one batch = one round trip). Input: {method (default GET), url, headers (object), query (object of querystring params), body (string for POST)}. Returns a JSON STRING: {\\\"status\\\":number,\\\"headers\\\":{selected response headers, e.g. x-wp-total, x-wp-totalpages, link, retry-after},\\\"body\\\":<parsed JSON or raw text>}. Use it to read pages you discover, to paginate APIs, and to fetch per-item detail endpoints in concurrent batches.\",\n    input_schema: { type: \"object\", properties: {\n      method:  { type: \"string\" },\n      url:     { type: \"string\" },\n      headers: { type: \"object\" },\n      query:   { type: \"object\" },\n      body:    { type: \"string\" }\n    }, required: [\"url\"] },\n    allowed_callers: [\"code_execution_20260120\"]\n  }\n];\n// cache_control (top-level) = Anthropic automatic prompt caching: the API moves the breakpoint to the\n// last cacheable block as the conversation grows. Reads bill at 0.1x. (#3348 ran fully uncached.)\nconst body = { model: \"claude-opus-4-8\", max_tokens: 32000, tools: tools, messages: S.messages, cache_control: { type: \"ephemeral\" } };\nif (S.container) body.container = S.container;\nreturn [{ json: { requestBody: body } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        760,
+        200
+      ],
+      "id": "ptc-build",
+      "name": "Build request"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.requestBody) }}",
+        "options": {
+          "timeout": 290000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        980,
+        200
+      ],
+      "id": "ptc-claude",
+      "name": "Claude (messages)",
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 15000
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst sd = $getWorkflowStaticData('global');\nsd.runs = sd.runs || {};\nconst S = sd.runs[$execution.id];\nif (!S) { return [{ json: { done: true, _error: 'missing run state (evicted? concurrent prune?)' } }]; }\nconst resp = $input.first().json;\n\nfunction extractFinal() {\n  // scan EVERY assistant code_execution_tool_result across the whole conversation for the RESULT_JSON: sentinel\n  let best = null, lastStdout = null;\n  for (const m of S.messages) {\n    if (!m || m.role !== 'assistant' || !Array.isArray(m.content)) continue;\n    for (const b of m.content) {\n      if (b.type === 'code_execution_tool_result' && b.content && typeof b.content.stdout === 'string') {\n        const s = b.content.stdout;\n        if (s.trim()) lastStdout = s.trim();\n        const i = s.lastIndexOf('RESULT_JSON:');\n        if (i !== -1) {\n          const j = s.slice(i + 12).trim();\n          try { best = JSON.parse(j); } catch (e) { if (!best) best = { error: 'result_json_unparseable', length: j.length, head: j.slice(0, 300) }; }\n        }\n      }\n    }\n  }\n  if (best) return best;\n  if (lastStdout) { try { return JSON.parse(lastStdout); } catch (e) { return { raw_stdout: lastStdout.slice(0, 2000) }; } }\n  const txt = S.messages.filter(function(m){ return m.role==='assistant' && Array.isArray(m.content); }).flatMap(function(m){ return m.content; }).filter(function(b){ return b.type==='text'; }).map(function(b){ return b.text; }).join('\\n');\n  return { text: txt.slice(0, 2000) };\n}\n\n// v3 (A4): API-level error -> bounded retry for transient classes; otherwise SALVAGE what the sandbox\n// already collected instead of discarding a 50-round harvest.\nif (!resp || resp.type === 'error' || !Array.isArray(resp.content)) {\n  const et = (resp && resp.error && resp.error.type) || '';\n  const retryable = ['overloaded_error', 'rate_limit_error', 'api_error', 'timeout_error'].indexOf(et) > -1;\n  if (retryable && (S.retries || 0) < 3) {\n    S.retries = (S.retries || 0) + 1;\n    await new Promise(function(r){ setTimeout(r, 15000 * S.retries); });   // 15s/30s/45s — far under the 4.5-min container idle limit\n    return [{ json: { done: false } }];                                     // re-send the SAME request (nothing appended)\n  }\n  S.done = true; S.final = Object.assign({}, extractFinal(), { _api_error: (resp && resp.error) || resp || 'empty response' });\n  return [{ json: { done: true } }];\n}\nS.retries = 0;\nif (resp.container && resp.container.id) S.container = resp.container.id;\n\n// --- memory guard --------------------------------------------------------------\n// Every prior http_request result has ALREADY been consumed by the sandbox and the container holds the\n// working state, so raw page bodies are never needed again. Trim already-delivered tool_result bodies\n// before they get re-sent (client-side payload control — the only lever on n8n Cloud's fixed heap).\nconst TRIMMED = '[result already delivered to the sandbox; body trimmed to save memory]';\nfor (const m of S.messages) {\n  if (!m || m.role !== 'user' || !Array.isArray(m.content)) continue;\n  for (const b of m.content) {\n    if (b && b.type === 'tool_result' && typeof b.content === 'string' && b.content !== TRIMMED && b.content.length > 200) {\n      b.content = TRIMMED;\n    }\n  }\n}\n// -------------------------------------------------------------------------------\n\nS.messages.push({ role: 'assistant', content: resp.content });\nS.round = (S.round || 0) + 1;\n\nconst stop = resp.stop_reason;\n\nif (stop === 'end_turn' || stop === 'max_tokens' || stop === 'refusal' || S.round >= 120) {\n  S.done = true; S.final = extractFinal();\n  if (stop === 'max_tokens' && S.final && typeof S.final === 'object') { S.final._truncated = true; S.final._warning = 'stopped at max_tokens — RESULT_JSON may be partial or missing'; }\n  if (stop === 'refusal' && S.final && typeof S.final === 'object') { S.final._refusal = true; }\n  if (S.round >= 120 && stop === 'tool_use' && S.final && typeof S.final === 'object') { S.final._round_capped = true; }\n  return [{ json: { done: true } }];\n}\n// v3.4: EVERY client tool_use block must get a tool_result — no exceptions, or the next request 400s\n// (\"tool_use ids were found without tool_result blocks immediately after\"). Real http_request calls are\n// serviced; any OTHER/unknown tool name gets a stub error result the model can read and recover from.\n// pause_turn with pending client tool_use is serviced too (resending as-is would leave ids unanswered).\nconst pending = Array.isArray(resp.content) ? resp.content.filter(function(b){ return b && b.type === 'tool_use'; }) : [];\nif (stop === 'pause_turn' && pending.length === 0) {\n  return [{ json: { done: false } }]; // true long-turn pause: resend as-is per docs\n}\nif ((stop === 'tool_use' || stop === 'pause_turn') && pending.length > 0) {\n  const KEEP_HEADERS = ['x-wp-total', 'x-wp-totalpages', 'link', 'content-type', 'retry-after', 'x-ratelimit-remaining', 'x-ratelimit-reset'];\n  const results = new Array(pending.length);\n  const self = this;\n  let next = 0;\n  async function worker() {\n    while (true) {\n      const i = next++;\n      if (i >= pending.length) return;\n      const b = pending[i];\n      let outStr;\n      if (b.name !== 'http_request') {\n        outStr = JSON.stringify({ status: 0, error: \"tool '\" + b.name + \"' does not exist. The ONLY available tool is http_request — call it from your Python code (await http_request({url: ...})).\" });\n      } else {\n        const inp = b.input || {};\n        try {\n          const r = await self.helpers.httpRequest({\n            method: String(inp.method || 'GET').toUpperCase(),\n            url: inp.url,\n            headers: inp.headers || {},\n            qs: inp.query || {},\n            body: inp.body,\n            json: false,\n            returnFullResponse: true,\n            timeout: 45000\n          });\n          let parsed; try { parsed = JSON.parse(r.body); } catch (e) { parsed = r.body; }\n          const hsrc = r.headers || {}; const hsel = {};\n          for (const hk of KEEP_HEADERS) { if (hsrc[hk] !== undefined) hsel[hk] = String(hsrc[hk]).slice(0, 300); }\n          outStr = JSON.stringify({ status: r.statusCode, headers: hsel, body: parsed });\n        } catch (e) {\n          const sc = (e && e.httpCode) || (e && e.statusCode) || 0;\n          outStr = JSON.stringify({ status: sc, error: String((e && e.message) || e) });\n        }\n      }\n      results[i] = { type: 'tool_result', tool_use_id: b.id, content: outStr };\n    }\n  }\n  const POOL = Math.min(8, pending.length);\n  await Promise.all(Array.from({ length: POOL }, function(){ return worker(); }));\n  // paranoia: no slot may remain unanswered\n  for (let i = 0; i < pending.length; i++) {\n    if (!results[i]) results[i] = { type: 'tool_result', tool_use_id: pending[i].id, content: JSON.stringify({ status: 0, error: 'servicing slot lost — retry this call' }) };\n  }\n  S.messages.push({ role: 'user', content: results }); // tool_result-only user message (PTC rule)\n  return [{ json: { done: false } }];\n}\nif (stop === 'tool_use') { S.done = true; S.final = Object.assign({}, extractFinal(), { _error: 'tool_use_with_no_blocks' }); return [{ json: { done: true } }]; }\nS.done = true; S.final = Object.assign({}, extractFinal(), { _error: 'unhandled_stop_reason: ' + stop });\nreturn [{ json: { done: true } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        200
+      ],
+      "id": "ptc-handle",
+      "name": "Handle + service tools"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.done }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1420,
+        200
+      ],
+      "id": "ptc-if",
+      "name": "Done?"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst sd = $getWorkflowStaticData('global');\nsd.runs = sd.runs || {};\nconst S = sd.runs[$execution.id] || {};\nconst cfg = ($('Build config').first() || {json:{}}).json || {};\nfunction normalizeDomain(d){ if(!d||typeof d!==\"string\") return \"\"; return d.toLowerCase().trim().replace(/^https?:\\/\\//,\"\").replace(/^www\\./,\"\").replace(/[\\/?#].*$/,\"\"); }\nfunction registrableDomain(d){ const n=normalizeDomain(d); if(!n) return \"\"; const p=n.split(\".\"); if(p.length<=2) return n; const last2=p.slice(-2).join(\".\"); const COMPOUND=[\"co.uk\",\"org.uk\",\"ac.uk\",\"gov.uk\",\"co.kr\",\"com.br\",\"com.au\",\"co.jp\",\"co.il\",\"co.za\",\"co.nz\",\"com.mx\",\"co.in\",\"com.sg\",\"com.tr\",\"com.cn\",\"com.hk\",\"co.th\",\"com.tw\",\"com.co\"]; return (COMPOUND.indexOf(last2)>-1 && p.length>=3)?p.slice(-3).join(\".\"):last2; }\nfunction normalizeName(name){ if(!name||typeof name!==\"string\") return \"\"; let s=name.toLowerCase().trim(); s=s.replace(/[.,]?\\s+(inc|llc|ltd|limited|corp|corporation|co|gmbh|sa|ag|plc|pte|bv)\\.?$/i,\"\"); return s.replace(/[^a-z0-9]/g,\"\"); }\nconst BLOCK = new Set([\"firecrawl.dev\",\"linkedin.com\",\"twitter.com\",\"x.com\",\"facebook.com\",\"instagram.com\",\"threads.net\",\"crunchbase.com\",\"youtube.com\",\"pitchbook.com\",\"bloomberg.com\",\"wikipedia.org\",\"g2.com\",\"github.com\",\"medium.com\",\"apps.apple.com\",\"play.google.com\",\"squarespace.com\",\"squarespace-cdn.com\",\"onetrust.com\",\"cloudfront.net\",\"cloudinary.com\",\"akamaized.net\"]);\nconst vcDom = registrableDomain(cfg.vc_domain);\nconst seenD = new Set(cfg.known_domains || []);   // already registrableDomain-normalized by Build config\nconst seenN = new Set(cfg.known_names || []);     // already normalizeName-normalized by Build config\nconst f = S.final || {};\ndelete sd.runs[$execution.id];                    // v3: run state is finished — stop static-data bloat\nconst mk = String(cfg.vc_domain || '').toLowerCase().replace(/^https?:\\/\\//,'').replace(/^www\\./,'').replace(/[\\/?#].*$/,'');\nfunction memo(field, val){ try { if (mk) { sd.vc_memory = sd.vc_memory || {}; sd.vc_memory[mk] = sd.vc_memory[mk] || {}; sd.vc_memory[mk][field] = val; sd.vc_memory[mk].ts = sd.vc_memory[mk].ts || new Date().toISOString(); } } catch(e) {} }\nlet companies = Array.isArray(f.companies) ? f.companies : (Array.isArray(f) ? f : []);\nconst out = [];\nlet internal = 0, considered = 0;\nfor (const c of companies) {\n  if (!c || typeof c !== 'object') continue;\n  const name = String(c.name || c.portco_name || \"\").trim();\n  const site = String(c.website || c.domain || c.url || \"\").trim();\n  const profile = String(c.profile_url || \"\").trim();\n  if (!name && !site && !profile) continue;\n  considered++;\n  let dom = registrableDomain(site);\n  // v3 (#3348): the firm's own domain / a BLOCK host is NOT a company identity — treat as domainless.\n  if (dom && (dom === vcDom || BLOCK.has(dom))) { internal++; dom = \"\"; }\n  else if (!dom && profile) { internal++; }       // explicit names-only entry (honest-fallback contract)\n  if (dom) {\n    if (seenD.has(dom)) continue; seenD.add(dom); // DOMAIN is the dedup key (QA#1: no name arm when a domain exists)\n    out.push({ json: { vc_account_id: cfg.vc_account_id, vc_name: cfg.vc_name, vc_domain: cfg.vc_domain, portco_name: name, url: site, domain: site, _source: \"ptc_harvester\" } });\n  } else {\n    const nm = normalizeName(name);\n    if (!nm) continue;\n    if (seenN.has(nm)) continue; seenN.add(nm);   // name arm ONLY for domainless entries (nothing else to key on)\n    out.push({ json: { vc_account_id: cfg.vc_account_id, vc_name: cfg.vc_name, vc_domain: cfg.vc_domain, portco_name: name, url: (profile || site), domain: \"\", _source: \"ptc_harvester\", _names_only: true } });\n  }\n}\n// v3: harvester error with nothing usable -> review verdict, never a junk staging row (A3).\nif ((f._api_error || f._error) && out.length === 0) {\n  memo('outcome', 'harvester_error');\n  return [{ json: { vc_account_id: cfg.vc_account_id, vc_name: cfg.vc_name, vc_domain: cfg.vc_domain, _review: true, _verdict: 'harvester_error',\n    _reason: ('harvester error: ' + JSON.stringify(f._api_error || f._error)).slice(0, 400) } }];\n}\n// v3 (#3348): >=90% firm-internal/blocked URLs -> internal_links_only verdict, never a silent 800->1 collapse.\nif (considered >= 10 && internal / considered >= 0.9) {\n  memo('outcome', 'internal_links_only');\n  return [{ json: { vc_account_id: cfg.vc_account_id, vc_name: cfg.vc_name, vc_domain: cfg.vc_domain, _review: true, _verdict: 'internal_links_only',\n    _reason: ('harvester returned ' + internal + '/' + considered + ' companies with only firm-internal/blocked URLs — a per-company detail/content endpoint probably carries the real domains (see agent notes); do not write these as companies'),\n    _names_only_count: out.length } }];\n}\nif (!out.length) {\n  memo('outcome', 'empty');\n  return [{ json: { vc_account_id: cfg.vc_account_id, vc_name: cfg.vc_name, vc_domain: cfg.vc_domain, _review: true, _verdict: 'empty_harvest',\n    _reason: ('harvest produced 0 net-new rows (raw count: ' + companies.length + ')' + (f._truncated ? ' [max_tokens truncation]' : '') + (f._refusal ? ' [refusal]' : '')).slice(0, 400) } }];\n}\nmemo('last_company_count', out.length);\nmemo('outcome', f._truncated ? 'written_truncated' : 'written');\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1620,
+        200
+      ],
+      "id": "ag-hv-stage",
+      "name": "Harvest → staging items"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.clay.com/v3/sources/webhook/YOUR-WEBHOOK-ID",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ vc_account_id: $json.vc_account_id, vc_name: $json.vc_name, vc_domain: $json.vc_domain, portco_name: $json.portco_name, url: $json.url, domain: $json.domain }) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1840,
+        200
+      ],
+      "id": "ag-hv-write",
+      "name": "Write harvest → Staging",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Fingerprint page source — deterministic pre-scan (free, no Firecrawl credits).  [v3]\n// Fetches the located portfolio page's RAW HTML (+ up to 5 same-site script bundles, smart-ranked),\n// regex-scans backend-API signatures, measures embedded state blobs (size = detection, not conclusion),\n// and — when WordPress is detected — fetches the /wp-json/ ROOT to list CUSTOM NAMESPACES.\n// (#3348 lesson: insight/v1/get-company-content carried the domains+status that wp/v2 lacked,\n//  and the v2 scan returned found:false on a WordPress site because api.w.org was not a signature.)\nconst c = $input.first().json;\nconst idx = c.index_url || (c.vc_domain ? (\"https://\" + String(c.vc_domain).replace(/^https?:\\/\\//, \"\")) : \"\");\nconst out = { ...c, _fingerprint: { found: false, http_status: null, summary: \"\", candidates: [] } };\nconst seen = new Set();\nfunction push(sig, value, src, excerpt) {\n  const k = sig + \"|\" + String(value).slice(0, 120);\n  if (seen.has(k)) return; seen.add(k);\n  out._fingerprint.candidates.push({ sig: sig, value: String(value).slice(0, 200), src: src, excerpt: String(excerpt || \"\").replace(/\\s+/g, \" \").slice(0, 220) });\n}\nfunction scan(text, src) {\n  const RX = [\n    [\"algolia_appId\",   /[\"']?(?:applicationId|appId|x-algolia-application-id)[\"']?\\s*[:=]\\s*[\"']([A-Z0-9]{8,14})[\"']/g],\n    [\"algolia_apiKey\",  /[\"']?(?:apiKey|searchApiKey|searchKey|x-algolia-api-key)[\"']?\\s*[:=]\\s*[\"']([a-f0-9]{16,64})[\"']/gi],\n    [\"algolia_index\",   /[\"']?indexName[\"']?\\s*[:=]\\s*[\"']([A-Za-z0-9_\\-\\.]{3,60})[\"']/g],\n    [\"algolia_host\",    /https?:\\/\\/[A-Z0-9]{6,14}(?:-dsn)?\\.algolia(?:\\.net|net\\.com)[^\"'\\s]*/gi],\n    [\"typesense\",       /x-typesense-api-key|typesense/gi],\n    [\"meilisearch\",     /meilisearch/gi],\n    [\"graphql_endpoint\",/[\"'](https?:\\/\\/[^\"']{4,160}graphql[^\"']{0,40})[\"']/gi],\n    [\"api_path\",        /[\"'](\\/(?:api|wp-json|_next\\/data|graphql)[^\"']{0,120})[\"']/g],\n    [\"wp_rest_root\",    /api\\.w\\.org/g],\n    [\"wp_admin_ajax\",   /admin-ajax\\.php/g],\n    [\"next_data\",       /__NEXT_DATA__/g],\n    [\"next_buildId\",    /\"buildId\"\\s*:\\s*\"([^\"]+)\"/g],\n    [\"nuxt\",            /__NUXT_DATA__|__NUXT__|_payload\\.json/g],\n    [\"remix\",           /__remixContext|\\?_data=/g],\n    [\"sveltekit\",       /__sveltekit|\\/__data\\.json/g],\n    [\"redux_state\",     /__INITIAL_STATE__|__PRELOADED_STATE__/g],\n    [\"gatsby\",          /page-data\\.json|___gatsby/g],\n    [\"apollo_state\",    /__APOLLO_STATE__/g],\n    [\"airtable\",        /airtable\\.com\\/(?:embed|shr)[A-Za-z0-9\\/]*/g],\n    [\"contentful\",      /cdn\\.contentful\\.com[^\"'\\s]*/g],\n    [\"sanity\",          /[a-z0-9]+\\.api(?:cdn)?\\.sanity\\.io[^\"'\\s]*/g],\n    [\"prismic\",         /[a-z0-9-]+\\.(?:cdn\\.)?prismic\\.io[^\"'\\s]*/g],\n    [\"webflow\",         /assets(?:-global)?\\.website-files\\.com|wf-collection/g],\n    [\"hubdb\",           /hubdb|hs-sites/gi]\n  ];\n  for (const pair of RX) {\n    const sig = pair[0], rx = pair[1];\n    let m, count = 0;\n    while ((m = rx.exec(text)) && count < 4) {\n      const val = m[1] !== undefined ? m[1] : m[0];\n      count++;\n      push(sig, val, src, text.slice(Math.max(0, m.index - 120), m.index + 160));\n      if (out._fingerprint.candidates.length >= 32) return;\n    }\n  }\n}\nfunction blobStats(html, marker) {\n  const i = html.indexOf(marker); if (i < 0) return null;\n  const s = html.indexOf(\">\", i); const e = html.indexOf(\"</script>\", s);\n  if (s < 0 || e < 0 || e <= s) return null;\n  const blob = html.slice(s + 1, e);\n  return { bytes: blob.length, nameKeys: (blob.match(/\"name\"\\s*:/g) || []).length };\n}\ntry {\n  if (idx) {\n    const r = await this.helpers.httpRequest({ method: \"GET\", url: idx, timeout: 20000, json: false, returnFullResponse: true, ignoreHttpStatusErrors: true, headers: { \"user-agent\": \"Mozilla/5.0 (compatible; PortcoFinder/1.0)\" } });\n    out._fingerprint.http_status = r.statusCode || null;\n    const html = String(r.body || \"\").slice(0, 2000000);\n    scan(html, \"page\");\n    // Embedded state blobs: report SIZE so the small-list vs giant-blob split is mechanical.\n    for (const marker of [\"__NEXT_DATA__\", \"__NUXT_DATA__\", \"__APOLLO_STATE__\", \"__PRELOADED_STATE__\"]) {\n      const st = blobStats(html, marker);\n      if (st) push(\"embedded_blob\", marker + \" ~\" + Math.round(st.bytes / 1024) + \"KB, \" + st.nameKeys + \" name-keys\", \"page\", \"\");\n    }\n    // WORDPRESS: fetch the REST ROOT and list custom namespaces + company-ish routes (#3348:\n    // custom routes like insight/v1/get-company-content expose fields the generic wp/v2 API lacks).\n    if (/api\\.w\\.org|\\/wp-json\\//.test(html)) {\n      try {\n        const origin = idx.replace(/^(https?:\\/\\/[^\\/]+).*/, \"$1\");\n        const rootRaw = String(await this.helpers.httpRequest({ method: \"GET\", url: origin + \"/wp-json/\", timeout: 20000, json: false, ignoreHttpStatusErrors: true })).slice(0, 2000000).replace(/\\\\\\//g, \"/\");\n        const ns = rootRaw.match(/\"namespaces\":\\s*\\[([^\\]]*)\\]/);\n        if (ns) push(\"wp_namespaces\", ns[1].replace(/[\"\\\\]/g, \"\").slice(0, 220), \"wp-json root\", \"\");\n        let rm; const rrx = /\"(\\/[a-zA-Z0-9_\\-\\/]*(?:compan|portfolio|invest|team|search|filter)[a-zA-Z0-9_\\-\\/]*)\"/gi;\n        let rc = 0;\n        while ((rm = rrx.exec(rootRaw)) && rc < 8) {\n          if (rm[1].indexOf(\"/wp/v2\") === 0) continue;\n          rc++; push(\"wp_custom_route\", rm[1], \"wp-json root\", \"\");\n        }\n      } catch (e) { /* root probe failed; not fatal */ }\n    }\n    // SPA bundles: rank candidates (main/app/index/runtime/search/portfolio first), fetch up to 5.\n    const all = []; let sm; const srx = /<script[^>]+src=[\"']([^\"']+)[\"']/gi;\n    while ((sm = srx.exec(html)) && all.length < 25) {\n      let u = sm[1];\n      if (u.startsWith(\"//\")) u = \"https:\" + u;\n      else if (u.startsWith(\"/\")) u = idx.replace(/^(https?:\\/\\/[^\\/]+).*/, \"$1\") + u;\n      if (!/^https?:\\/\\//.test(u)) continue;\n      if (/(googletagmanager|google-analytics|gtag|hotjar|segment|intercom|hubspot|facebook|linkedin|clarity|cookiebot|onetrust|doubleclick|recaptcha)/i.test(u)) continue;\n      all.push(u);\n    }\n    all.sort(function(a, b){ return ((/(main|app|index|runtime|search|portfolio|chunk)/i.test(b)) ? 1 : 0) - ((/(main|app|index|runtime|search|portfolio|chunk)/i.test(a)) ? 1 : 0); });\n    for (const u of all.slice(0, 5)) {\n      if (out._fingerprint.candidates.length >= 32) break;\n      try {\n        const rb = await this.helpers.httpRequest({ method: \"GET\", url: u, timeout: 20000, json: false, ignoreHttpStatusErrors: true });\n        scan(String(rb || \"\").slice(0, 2000000), u.slice(0, 120));\n      } catch (e) { /* skip bundle */ }\n    }\n  }\n} catch (e) {\n  out._fingerprint.summary = \"scan failed: \" + String((e && e.message) || e).slice(0, 200);\n  return [{ json: out }];\n}\nconst statusLine = (out._fingerprint.http_status && out._fingerprint.http_status >= 400)\n  ? (\"PAGE FETCH RETURNED HTTP \" + out._fingerprint.http_status + \" — scan UNRELIABLE (bot wall?); do NOT treat 'no signatures' as evidence of no API.\\n\") : \"\";\nif (out._fingerprint.candidates.length) {\n  out._fingerprint.found = true;\n  out._fingerprint.summary = (statusLine + out._fingerprint.candidates.map(function(cd){ return \"- \" + cd.sig + \": \" + cd.value + \"  [\" + cd.src + \"]\" + (cd.excerpt ? (\" ...\" + cd.excerpt) : \"\"); }).join(\"\\n\")).slice(0, 6000);\n} else {\n  out._fingerprint.summary = statusLine.trim();\n}\nreturn [{ json: out }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -400,
+        -160
+      ],
+      "id": "c751fd39-cc58-4e73-b929-bd9d443e327d",
+      "name": "Fingerprint page source"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Save VC memory — per-VC discovery record in workflow static data (free, deterministic).\n// NOTE: static data persists only on PRODUCTION (trigger) executions, not manual test runs.\nconst sd = $getWorkflowStaticData('global');\nconst j = $input.first().json || {};\nlet cfg = {}; try { cfg = ($('Build config').first() || {json:{}}).json || {}; } catch(e) {}\nfunction memKey(dm){ return String(dm||'').toLowerCase().replace(/^https?:\\/\\//,'').replace(/^www\\./,'').replace(/[\\/?#].*$/,''); }\nconst k = memKey(cfg.vc_domain);\nif (k) {\n  sd.vc_memory = sd.vc_memory || {};\n  const prev = sd.vc_memory[k] || {};\n  sd.vc_memory[k] = {\n    ts: new Date().toISOString(),\n    strategy: j.strategy || \"\",\n    archetype: j._agent_archetype || \"\",\n    notes: String(j._agent_notes || \"\").slice(0, 600),\n    crawl_url: j.crawl_url || \"\",\n    path_hint: j.path_hint || \"\",\n    page_urls_count: Array.isArray(j.page_urls) ? j.page_urls.length : 0,\n    estimated_count: j.estimated_count,\n    confidence: j._agent_confidence,\n    last_company_count: prev.last_company_count || null\n  };\n  const keys = Object.keys(sd.vc_memory);\n  if (keys.length > 800) {\n    keys.sort((a,b) => String(sd.vc_memory[a].ts||'').localeCompare(String(sd.vc_memory[b].ts||'')));\n    for (const old of keys.slice(0, keys.length - 800)) delete sd.vc_memory[old];\n  }\n}\nreturn [{ json: j }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        -160
+      ],
+      "id": "3c595f61-ff63-4051-8a15-b07c565ccc20",
+      "name": "Save VC memory"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json._crawl_endpoint }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "firecrawlApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json._crawl_body }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        620,
+        -440
+      ],
+      "id": "449fe3a6-efd9-4bd2-a42c-f44bd6076801",
+      "name": "Crawl submit (det)",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "amount": 15
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        800,
+        -440
+      ],
+      "id": "99c9d9fd-4b30-4c96-aab2-b6c19c1e9d21",
+      "name": "Wait 15s (crawl)",
+      "webhookId": "0b81ce15-3315-4919-b64f-a027b6b9e77f"
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Crawl submit (det)').first().json.url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "firecrawlApi",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        980,
+        -440
+      ],
+      "id": "319dd53c-6d7d-4455-8eb0-20909eade203",
+      "name": "Get crawl status (det)",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c-done",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "completed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1160,
+        -440
+      ],
+      "id": "a2a79477-a686-457e-88c9-abde853bf7d1",
+      "name": "Crawl done? (det)"
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Crawl submit (det)').first().json.url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "firecrawlApi",
+        "options": {
+          "pagination": {
+            "pagination": {
+              "paginationMode": "responseContainsNextURL",
+              "nextURL": "={{ $response.body.next }}",
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ !$response.body.next }}",
+              "limitPagesFetched": true,
+              "maxRequests": 40,
+              "requestInterval": 300
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1340,
+        -520
+      ],
+      "id": "dbc5fb7d-db1e-4521-a602-69292fbcb781",
+      "name": "Fetch all crawl pages",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "// v3.12 ROSTER-FIRST: the crawl branch scrapes ONLY directory pages; each page's extraction is roster\n// rows {name, status, external_domain, profile_url}. This node is the DETERMINISTIC population gate:\n//   merge duplicate cards -> drop non-current statuses (auditable token list) -> emit Parse-harvest shape:\n//   external_domain -> direct candidate; else profile_url -> vcDom lookup (first-class under _roster).\n// Name-only rows (logo grids) are counted and dropped — a16z policy: review, never name-search.\nfunction s(v){ if (v == null) return \"\"; if (Array.isArray(v)) return v.join(\" \"); return String(v); }\nconst DROP = /exit|acquir|merger|merged|prior|alumni|former|divest|realized|legacy|graduat|\\bpast\\b/i;  // not-current tokens (PE vocab incl. Realized/Legacy/Past; v3.13.4: stock-exchange tickers — F-Prime prints \"NASDAQ: TOST\" as the status for IPO'd cos, which carried zero previous DROP tokens). KEEP (current/active) still overrides.\nconst KEEP = /current|active/i;                                                // explicit current wins over co-tags (Klaviyo: \"IPO Current\")\nlet rows = []; let status = \"\"; let respN = 0; let pageN = 0; const pageUrls = []; const pageLinks = [];\nfor (const it of $input.all()){\n  const j = it.json || {};\n  const resp = (j.body !== undefined && j.body !== null) ? j.body : j;\n  respN++;\n  if (resp.status) status = resp.status;\n  const pages = Array.isArray(resp.data) ? resp.data : [];\n  pageN += pages.length;\n  for (const p of pages){\n    try { const u = ((p||{}).metadata||{}).url || ((p||{}).metadata||{}).sourceURL || \"\"; if (u) pageUrls.push(u); } catch (e) {}\n    const ex = (p && p.json) || {};\n    const cos = Array.isArray(ex.companies) ? ex.companies : [];\n    for (const c of cos){ if (c && typeof c === \"object\") rows.push(c); }\n    if (Array.isArray(p && p.links)) for (const L of p.links) pageLinks.push(L);\n  }\n}\n// pass 1: merge duplicate cards (Webflow renders each company 2-3x per page; pages can re-list)\nconst merged = new Map();\nfor (const c of rows){\n  const name = s(c.name).trim(), st = s(c.status).trim();\n  const ext = s(c.external_domain || c.domain).trim(), prof = s(c.profile_url || c.lookup_url).trim();\n  if (!name && !ext && !prof) continue;\n  const key = (prof || ext || name).toLowerCase().replace(/\\/+$/, \"\");\n  const m = merged.get(key) || { name: \"\", st: \"\", ext: \"\", prof: \"\" };\n  if (name.length > m.name.length) m.name = name;\n  if (st && m.st.toLowerCase().indexOf(st.toLowerCase()) === -1) m.st = (m.st ? m.st + \" \" : \"\") + st;  // union of statuses across cards\n  if (!m.ext) m.ext = ext;\n  if (!m.prof) m.prof = prof;\n  merged.set(key, m);\n}\n// pass 1.5 (v3.15 LINKS SAFETY NET): JSON extraction truncates on dense pages (F-Prime live:\n// 37/~375 rows, alphabetical cutoff) — the free `links` format never truncates. Add profile links\n// the extraction missed: same registrable host as the roster page, path matching the agent's\n// path_hint, not already covered. Status unknown -> KEPT (fail-open); the resolve prompt now reads\n// each profile page's own status and empties exited/ticker'd companies (it fetches the page anyway).\nfunction slugName(u){ try { const seg=(u.replace(/[?#].*$/,\"\").replace(/\\/+$/,\"\").split(\"/\").pop()||\"\"); return seg.split(\"-\").map(function(w){return w? w.charAt(0).toUpperCase()+w.slice(1):w;}).join(\" \").trim(); } catch(e){ return \"\"; } }\nlet linksAdded = 0;\nconst hint = (function(){ let h=\"\"; try { h=String($('Build crawl body').first().json.path_hint||\"\").trim(); } catch(e){} return (h && h.length>2) ? h.toLowerCase() : \"\"; })();\nif (hint && pageLinks.length){\n  const rosterHost = (function(){ try { const m=(pageUrls[0]||\"\").toLowerCase().match(/^[a-z][a-z0-9+.-]*:\\/\\/([^/?#]*)/); return m? m[1].replace(/^www\\./,\"\") : \"\"; } catch(e){ return \"\"; } })();\n  for (const L of pageLinks){\n    const t=(typeof L===\"string\"?L:\"\").trim(); if(!t) continue;\n    const low=t.toLowerCase();\n    const hm=low.match(/^[a-z][a-z0-9+.-]*:\\/\\/([^/?#]*)/); if(!hm) continue;\n    const host=hm[1].replace(/^www\\./,\"\");\n    if (rosterHost && host!==rosterHost) continue;                 // firm's own profile pages only\n    if (low.indexOf(hint)===-1) continue;                          // must match the profile-path prefix\n    const key=low.replace(/[?#].*$/,\"\").replace(/\\/+$/,\"\");\n    if (key.endsWith(hint.replace(/\\/+$/,\"\"))) continue;           // skip the bare /company/ index itself\n    if (merged.has(key)) continue;                                 // already covered by extraction\n    const nm=slugName(t); if(!nm) continue;\n    merged.set(key, { name:nm, st:\"\", ext:\"\", prof:t.replace(/[?#].*$/,\"\") });\n    linksAdded++;\n  }\n}\n// pass 2: status filter -> Parse-harvest contract\nconst companies = []; let droppedStatus = 0, nameOnly = 0;\nfor (const m of merged.values()){\n  if (m.st && DROP.test(m.st) && !KEEP.test(m.st)) { droppedStatus++; continue; }\n  if (m.ext) { companies.push({ name: m.name, domain: m.ext, lookup_url: m.prof || \"\" }); continue; }\n  if (m.prof) { companies.push({ name: m.name, domain: \"\", lookup_url: m.prof }); continue; }\n  nameOnly++;\n}\nlet est = 0; try { est = Number($('Build crawl body').first().json.estimated_count) || 0; } catch (e) {}\nconst undercount = est > 0 && (companies.length + droppedStatus) < Math.ceil(est * 0.5);\nconst note = \"roster: crawl_status=\" + (status || \"?\") + \", pages=\" + pageN + \", rows=\" + rows.length + \", links_added=\" + linksAdded + \", unique=\" + merged.size +\n  \", kept=\" + companies.length + \", dropped_status=\" + droppedStatus + \", name_only=\" + nameOnly +\n  (est ? (\", estimated=\" + est) : \"\") +\n  (undercount ? \" | WARNING roster_undercount <50% of estimate (JS load-more directory? pagination not discovered?)\" : \"\");\nreturn [{ json: { content: JSON.stringify({ companies: companies }), _strategy: \"crawl\", _roster: true, _roster_note: note,\n  _crawl_responses: respN, _roster_pages: pageN, _roster_page_urls: pageUrls, _roster_rows: rows.length, _roster_kept: companies.length,\n  _roster_dropped_status: droppedStatus, _roster_name_only: nameOnly, _partial: (status !== \"completed\") } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        -520
+      ],
+      "id": "81797ed4-4c1d-4e85-9a33-898364e851f2",
+      "name": "Crawl → companies"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "cf-failed",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "failed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "cf-cancelled",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "cancelled",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "cf-timeout",
+              "leftValue": "={{ $runIndex >= 60 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "v3-crawl-failed",
+      "name": "Crawl failed? (det)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1160,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// v3 (A2): a failed/cancelled/stuck crawl is a REVIEW verdict with an honest reason — not an empty quarantine.\nconst j = $input.first().json || {};\nlet cfg = {}; try { cfg = ($('Build config').first() || {json:{}}).json || {}; } catch(e) {}\nreturn [{ json: { vc_account_id: cfg.vc_account_id || '', vc_name: cfg.vc_name || '', vc_domain: cfg.vc_domain || '', _review: true, _verdict: 'crawl_failed',\n  _reason: ('crawl ended status=' + (j.status || '(no status / poll timeout ~10min)') + '; completed=' + (j.completed || 0) + '/' + (j.total || 0)).slice(0, 300) } }];"
+      },
+      "id": "v3-crawl-review-reason",
+      "name": "Crawl review reason",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1380,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "hr-review",
+              "leftValue": "={{ $json._review }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "v3-harvest-review",
+      "name": "Harvest needs review?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1820,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// v3 (A7): every review/quarantine verdict becomes a row downstream automation can see — never a dead end.\nconst j = $input.first().json || {};\nlet cfg = {}; try { cfg = ($('Build config').first() || {json:{}}).json || {}; } catch(e) {}\nlet plan = {}; try { plan = ($('Read plan').first() || {json:{}}).json || {}; } catch(e) {}\nconst verdict = j._verdict || 'review';\nconst reason = String(j._reason || j._warning || ('strategy=' + (plan._raw_strategy || plan.strategy || j.strategy || '(pre-agent)'))).slice(0, 500);\nconst notes = String(j._agent_notes || plan._agent_notes || '').slice(0, 800);\nreturn [{ json: {\n  vc_account_id: j.vc_account_id || cfg.vc_account_id || '', vc_name: j.vc_name || cfg.vc_name || '', vc_domain: j.vc_domain || cfg.vc_domain || '',\n  portco_name: '', url: '', domain: '',\n  verdict: verdict, reason: reason, agent_notes: notes, strategy: plan._raw_strategy || plan.strategy || '', _source: 'portco_finder_review'\n} }];"
+      },
+      "id": "v3-build-review-row",
+      "name": "Build review row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1880,
+        -220
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.clay.com/v3/sources/webhook/YOUR-WEBHOOK-ID",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ vc_account_id: $json.vc_account_id, vc_name: $json.vc_name, vc_domain: $json.vc_domain, portco_name: $json.portco_name, url: $json.url, domain: $json.domain, verdict: $json.verdict, reason: $json.reason, agent_notes: $json.agent_notes, strategy: $json.strategy }) }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "v3-write-review",
+      "name": "Write review → Staging",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2100,
+        -220
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "// v3.14 BATCH-ALWAYS roster fetch. (Crawl mode DELETED.)\n// HISTORY in one breath: namespace-crawl fetched the firm's all-time archive (v3.12 fixed with\n// directory-roster); crawl link-discovery picked ONE of N pagination links per run, a coin flip\n// (v3.13 fixed with agent-enumerated page_urls -> batch); then a single-page directory (F-Prime)\n// obeyed \"leave page_urls empty when no pager\" and fell back to crawl mode again (v3.13.4 OPEN note).\n// REALIZATION: we ALWAYS know the page set — crawl_url + any observed pager pages. Batch-scrape the\n// known list every time. No discovery, no crawlEntireDomain/includePaths semantics, no coin flips.\n// A missed pager = deterministic miss WITH the undercount warning (vs crawl's silent random miss).\n// (Standing rules: body built in CODE never {{ }} [v3.7]; no host APIs [v3.11.1]; maxAge 0 — rosters\n// never ride cache [v3.12.1]; proxy auto [v3.12.2]; timeout 300000 = API max [v3.13.3].)\nconst j = $input.first().json;\nconst EXTRACT = {\n  formats: [{\n    type: \"json\",\n    prompt: \"This page is an investment firm's portfolio DIRECTORY (a list of portfolio companies). Extract EVERY company row/card on THIS page, including exited/acquired ones. For each: name; status EXACTLY as printed on the row, if any (e.g. Current / Exited / Merger / IPO / 'Acquired by ...' / a stock ticker — keep multiple words as printed); external_domain = the company's OWN website domain ONLY if it literally appears as a link on this page (often it does not — then leave it empty, do NOT guess); profile_url = the absolute URL of the company's detail/profile page on the firm's own site, if the row links to one. Do not extract sector filters, navigation, news items, or team members.\",\n    schema: { type: \"object\", properties: { companies: { type: \"array\", items: { type: \"object\", properties: { name: { type: \"string\" }, status: { type: \"string\" }, external_domain: { type: \"string\" }, profile_url: { type: \"string\" } } } } } }\n  }, \"links\"],   // v3.15: links format is FREE and DETERMINISTIC — JSON extraction truncates on dense\n                 // pages (F-Prime live: 37 of ~375 rows emitted, alphabetical cutoff), links never do.\n  onlyMainContent: true,   // KEEP true: A2 proved the roster survives the main-content filter; false would\n                           // bloat extraction input with nav/footer junk (vendor probe used false only to test render)\n  waitFor: 3000,           // v3.15.1: Firecrawl's own debug verdict on the F-Prime child death — transient,\n                           // no logged error, their probe succeeded with a 3s render settle. Vendor-recommended.\n  maxAge: 0,\n  proxy: \"auto\",\n  timeout: 300000\n};\nconst pageUrls = (Array.isArray(j.page_urls) ? j.page_urls : []).filter(function(u){ return typeof u === \"string\" && /^https?:\\/\\//i.test(u); });\nconst seen = new Set(); const urls = [];\nfor (const u of [ (j.crawl_url || \"\") ].concat(pageUrls)){\n  const t = (u || \"\").trim(); if (!t) continue;\n  const k = t.toLowerCase().replace(/\\/+$/, \"\");\n  if (seen.has(k)) continue; seen.add(k); urls.push(t);\n}\nconst body = Object.assign({ urls: urls.slice(0, 25), maxConcurrency: 10 }, EXTRACT);   // batch/scrape: options TOP-LEVEL\nconst scopeNote = \"roster-batch: \" + body.urls.length + \" explicit directory page(s)\" + (pageUrls.length ? \"\" : \" (no pager observed)\");\nreturn [{ json: { ...j, _crawl_endpoint: \"https://api.firecrawl.dev/v2/batch/scrape\", _crawl_scope_note: scopeNote, _crawl_body: JSON.stringify(body) } }];"
+      },
+      "id": "v37-build-crawl-body",
+      "name": "Build crawl body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        -440
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build profile batch body (v3.16) — Run Once for All Items.\n// The roster's lookups are profile pages (F-Prime-style) that hold each company's real external domain\n// ONLY on the profile, not on the directory. The old 'Claude resolve' web_fetched all ~241 of them ->\n// Anthropic web_fetch max_uses(12)/too_many_requests starvation (live: ~115/241, run-to-run variance).\n// Instead: batch-scrape the profile pages with Firecrawl (proxy-rotated, no per-call fetch cap) and mine\n// domain+status deterministically in 'Profiles → domains'. Body conventions mirror 'Build crawl body':\n// CODE-built (never {{ }}), no host APIs, maxAge 0, proxy auto, timeout = API max. Reuses the\n// _crawl_endpoint/_crawl_body field names so 'Profiles submit (det)' is a verbatim clone of 'Crawl submit (det)'.\nconst seen = new Set(); const urls = [];\nfor (const it of $('Parse harvest').all()){\n  const arr = (it.json && it.json._fallback) ? it.json._fallback : [];\n  for (const e of arr){\n    if (!e || !e.lookup_url) continue;                      // directs already carry a domain; only profile/article pages need scraping\n    const t = String(e.lookup_url).trim(); if (!t) continue;\n    const clean = t.replace(/[?#].*$/, \"\");\n    const k = clean.toLowerCase().replace(/\\/+$/, \"\");\n    if (seen.has(k)) continue; seen.add(k); urls.push(clean);\n  }\n}\nconst body = {\n  urls: urls,\n  maxConcurrency: 10,\n  formats: [\"markdown\", \"links\"],   // mine the domain from links + status from markdown; no JSON extraction (cheaper, never truncates)\n  onlyMainContent: true,\n  maxAge: 0,\n  proxy: \"auto\",\n  timeout: 300000\n};\nreturn [{ json: {\n  _crawl_endpoint: \"https://api.firecrawl.dev/v2/batch/scrape\",\n  _crawl_body: JSON.stringify(body),\n  _profile_count: urls.length,\n  _profile_note: \"profile-batch: \" + urls.length + \" profile page(s)\" + (urls.length ? \"\" : \" | WARNING 0 lookups — batch submit will error (firm yielded only directs; route inline instead)\")\n} }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1660,
+        360
+      ],
+      "id": "4500ebbe-aaeb-46ed-a935-2f63f3058245",
+      "name": "Build profile batch body"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json._crawl_endpoint }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "firecrawlApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json._crawl_body }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1840,
+        360
+      ],
+      "id": "8169d905-b8bd-4df6-9ec2-a81a57f1b5ff",
+      "name": "Profiles submit (det)",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "amount": 15
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2020,
+        360
+      ],
+      "id": "748510c8-8615-4a05-bded-caba8ecb06c6",
+      "name": "Wait 15s (profiles)",
+      "webhookId": "b023484a-e868-404d-a840-03849c8eaf43"
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Profiles submit (det)').first().json.url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "firecrawlApi",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        360
+      ],
+      "id": "3c7b42e9-2ba6-481b-a354-035ea1745a5b",
+      "name": "Get profiles status (det)",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c-done",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "completed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "p-cap",
+              "leftValue": "={{ $runIndex }}",
+              "rightValue": 40,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2380,
+        360
+      ],
+      "id": "76a9541c-8057-436f-89de-8e8b944a1fae",
+      "name": "Profiles done? (det)"
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Profiles submit (det)').first().json.url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "firecrawlApi",
+        "options": {
+          "pagination": {
+            "pagination": {
+              "paginationMode": "responseContainsNextURL",
+              "nextURL": "={{ $response.body.next }}",
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ !$response.body.next }}",
+              "limitPagesFetched": true,
+              "maxRequests": 40,
+              "requestInterval": 300
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2560,
+        300
+      ],
+      "id": "e69938b9-c5d9-40ec-a633-591a9f5ae57d",
+      "name": "Fetch all profile pages",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "// shared pure logic for the verdict layer (v3.17) — inlined into the n8n nodes + tested here\nfunction normDom(d){ if(!d||typeof d!==\"string\") return \"\"; return d.toLowerCase().trim().replace(/^https?:\\/\\//,\"\").replace(/^www\\./,\"\").replace(/[\\/?#].*$/,\"\"); }\nfunction regDom(d){ const n=normDom(d); if(!n) return \"\"; const p=n.split(\".\"); if(p.length<=2) return n; const last2=p.slice(-2).join(\".\"); const C=[\"co.uk\",\"org.uk\",\"ac.uk\",\"gov.uk\",\"co.kr\",\"com.br\",\"com.au\",\"co.jp\",\"co.il\",\"co.za\",\"co.nz\",\"com.mx\",\"co.in\",\"com.sg\",\"com.tr\",\"com.cn\",\"com.hk\",\"co.th\",\"com.tw\",\"com.co\"]; return (C.indexOf(last2)>-1&&p.length>=3)?p.slice(-3).join(\".\"):last2; }\nfunction hostReg(u){ const m=String(u||\"\").toLowerCase().match(/^[a-z][a-z0-9+.-]*:\\/\\/([^\\/?#]*)/); return m?regDom(m[1]):\"\"; }\nfunction fullKey(u){ let s=String(u||\"\").toLowerCase().trim(); s=s.replace(/^https?:\\/\\//,\"\").replace(/^www\\./,\"\").replace(/[?#].*$/,\"\").replace(/\\/+$/,\"\"); return s; }\nfunction cleanUrl(u){ if(!u||typeof u!==\"string\") return null; let s=u.trim(); const m=s.match(/https?:\\/\\/[^\\s)\\]]+/i); if(m) s=m[0]; if(s===\"\"||s===\"/\"||s.indexOf(\"#\")===0||/^(javascript|mailto|tel):/i.test(s)) return null; if(/^https?:\\/\\//i.test(s)) return /^https?:\\/\\/[^\\/\\s]+\\.[a-z]{2,}/i.test(s)?s:null; return /^[^\\/\\s]+\\.[a-z]{2,}/i.test(s)?(\"https://\"+s):null; }\nvar BLOCK=new Set([\"linkedin.com\",\"twitter.com\",\"x.com\",\"facebook.com\",\"instagram.com\",\"threads.net\",\"youtube.com\",\"tiktok.com\",\"t.me\",\"discord.gg\",\"discord.com\",\"reddit.com\",\"crunchbase.com\",\"pitchbook.com\",\"wikipedia.org\",\"g2.com\",\"github.com\",\"apps.apple.com\",\"play.google.com\",\"firecrawl.dev\",\"substack.com\",\"medium.com\",\"beehiiv.com\",\"ghost.io\",\"wordpress.com\",\"mirror.xyz\",\"notion.site\",\"hashnode.dev\",\"squarespace.com\",\"squarespace-cdn.com\",\"onetrust.com\",\"cloudfront.net\",\"cloudinary.com\",\"akamaized.net\",\"gravatar.com\",\"w.org\",\"plasmic.app\",\"techcrunch.com\",\"forbes.com\",\"bloomberg.com\",\"businesswire.com\",\"prnewswire.com\",\"globenewswire.com\",\"statnews.com\",\"fiercebiotech.com\",\"fiercehealthcare.com\",\"reuters.com\",\"wsj.com\",\"nytimes.com\",\"vogue.com\",\"time.com\",\"inc.com\",\"fastcompany.com\",\"today.com\",\"newsweek.com\"]);\nvar CONTENT_HOSTS=new Set([\"substack.com\",\"medium.com\",\"beehiiv.com\",\"ghost.io\",\"wordpress.com\",\"mirror.xyz\",\"notion.site\",\"hashnode.dev\"]);\nfunction pickDomain(links, firmHostReg){ for (const L of (Array.isArray(links)?links:[])){ const rd=hostReg(L); if(!rd) continue; if(rd===firmHostReg) continue; if(BLOCK.has(rd)) continue; return rd; } return \"\"; }\nfunction evidence(md){ var t=String(md||\"\"); var foot=t.indexOf(\"Sign up to get the latest updates\"); if(foot>-1) t=t.slice(0,foot); var sm=t.match(/###\\s*Status\\s*\\n+\\s*([A-Za-z][A-Za-z \\/-]*)/); var st=sm?(\"STATUS: \"+sm[1].trim()+\" | \"):\"\"; var head=t.slice(0,650).replace(/\\s+/g,\" \").trim(); return (st+head).slice(0,800); }\nfunction llmText(resp){ const r=resp||{}; let c=null; if(r.choices&&r.choices[0]&&r.choices[0].message) c=r.choices[0].message.content; if(c==null&&r.message) c=(typeof r.message.content!==\"undefined\")?r.message.content:r.message; if(c==null&&typeof r.content!==\"undefined\") c=r.content; if(c==null&&typeof r.text!==\"undefined\") c=r.text; if(Array.isArray(c)) c=c.map(function(b){return (b&&typeof b.text===\"string\")?b.text:(typeof b===\"string\"?b:\"\");}).join(\" \"); if(c&&typeof c===\"object\") c=c.text||c.content||JSON.stringify(c); return (typeof c===\"string\")?c:(c!=null?String(c):\"\"); }\nfunction parseCompanies(txt){ if(!txt) return []; let o=null; try{o=JSON.parse(txt);}catch(e){ const m=txt.match(/\\{[\\s\\S]*\\}/); if(m){try{o=JSON.parse(m[0]);}catch(e2){}} } if(o&&Array.isArray(o.companies)) return o.companies; if(Array.isArray(o)) return o; return []; }\nfunction assembleRows(fbArr, verdictItems, cfg, knownDomains){\n  const vcDom=regDom(cfg.vc_domain);\n  const lookupSet=new Set(); for(const e of fbArr){ if(e&&e.lookup_url){const fk=fullKey(e.lookup_url); if(fk) lookupSet.add(fk);} }\n  function keyOf(u){ const fk=fullKey(u); if(lookupSet.has(fk)) return \"LU|\"+fk; return regDom(cleanUrl(u)||u||\"\"); }\n  const verd={};\n  for(const it of verdictItems){ for(const c of parseCompanies(llmText(it.json!==undefined?it.json:it))){ if(!c||typeof c!==\"object\")continue; const key=keyOf(c.source_url); if(!key)continue; const dom=regDom(cleanUrl(c.domain)||c.domain||\"\"); if(!verd[key]) verd[key]={domain:dom,keep:(c.keep!==false),status:(c.status||\"\")}; } }\n  const fb={};\n  for(const e of fbArr){ const isLU=!!(e&&e.lookup_url); const key=isLU?keyOf(e.lookup_url):regDom(cleanUrl(e.source_url)||e.source_url||e.domain||\"\"); if(!key)continue; if(!fb[key]) fb[key]={name:(e.name||\"\"),domain:regDom(e.domain||\"\")}; }\n  const out=[]; const seen=new Set(knownDomains||[]);\n  for(const key of Object.keys(fb)){\n    const f=fb[key]; const v=verd[key]||null;\n    if(v && v.keep===false) continue;\n    let domain=(v&&v.domain&&v.domain!==vcDom&&!BLOCK.has(v.domain)&&!CONTENT_HOSTS.has(v.domain))?v.domain:f.domain;\n    if(!domain||domain===vcDom||BLOCK.has(domain)||CONTENT_HOSTS.has(domain)) continue;\n    if(seen.has(domain)) continue; seen.add(domain);\n    out.push({ portco_name:(f.name||null), url:\"https://\"+domain, domain:domain, _resolved_via:(v?(\"claude-verdict-\"+(v.status||\"current\")):\"miner-fallback\") });\n  }\n  return out;\n}\nvar NEWDROP=/exit|acquir|merger|merged|prior|alumni|former|divest|realized|legacy|graduat|\\bpast\\b/i;\nvar KEEP=/current|active/i;\n\n// ── Profiles → domains (v3.17) — Run Once for All Items ──────────────────────────────\n// Deterministic domain-pick from the Firecrawl profile scrape, then hand SCRAPED EVIDENCE to a Claude\n// verdict node (next) that confirms the domain + judges current-vs-exited DYNAMICALLY. No status filter\n// here: KEEP everything, let the verdict decide (\"keep publics, drop only acquired/merged/defunct\" is a\n// prompt rule, not a regex token list — the regex missed SHA:/HKSE:). Emits {_llm_prompt,_fallback}\n// chunks — the same contract the resolve→ParseClaude path already consumes.\nconst reqByFk={};\nfor (const it of $('Parse harvest').all()){ const a=(it.json&&it.json._fallback)?it.json._fallback:[]; for(const e of a){ if(e&&e.lookup_url){ const fk=fullKey(e.lookup_url); if(fk&&!reqByFk[fk]) reqByFk[fk]={source_url:e.lookup_url,name:(e.name||\"\")}; } } }\nconst cos=[]; let pagesN=0,matched=0,noDom=0;\nfor (const it of $input.all()){\n  const j=it.json||{}; const resp=(j.body!==undefined&&j.body!==null)?j.body:j; const pages=Array.isArray(resp.data)?resp.data:[];\n  for (const p of pages){ pagesN++;\n    const meta=(p&&p.metadata)||{}; const u=meta.url||meta.sourceURL||\"\"; const fk=fullKey(u);\n    const req=reqByFk[fk]; if(!req) continue; matched++;\n    const md=(p&&p.markdown)||\"\"; const links=(p&&Array.isArray(p.links))?p.links:[];\n    const domain=pickDomain(links,hostReg(u)); if(!domain) noDom++;\n    const h1=((md.match(/^#\\s+(.+?)\\s*$/m)||[])[1]||\"\").trim();\n    cos.push({ source_url:req.source_url, name:h1||req.name||\"\", domain:domain, evidence:evidence(md) });\n  }\n}\nconst cfg=$('Build config').first().json;\nconst note=\"profile-mine v3.17: pages=\"+pagesN+\", matched=\"+matched+\", companies=\"+cos.length+\", no_domain=\"+noDom;\nconst CHUNK=20; const out=[];\nfor(let i=0;i<cos.length;i+=CHUNK){\n  const chunk=cos.slice(i,i+CHUNK);\n  const listed=chunk.map(function(c,k){ return (k+1)+'. name=\"'+c.name+'\"  candidate_domain=\"'+c.domain+'\"  source_url='+c.source_url+'\\n   evidence: '+c.evidence; }).join(\"\\n\\n\");\n  const prompt='You are validating portfolio companies for the VC '+cfg.vc_name+'. Each item gives a company name, a candidate website domain extracted from the VC profile page for that company, the source_url, and an evidence snippet from that profile page.\\n\\nFor EACH company return:\\n- \"source_url\": echoed EXACTLY as given.\\n- \"domain\": the correct canonical company website domain. Use candidate_domain if it is right; correct it ONLY if the evidence clearly shows a different official company site. Never return the VC own domain, a social/jobs/press host, or empty unless the evidence truly shows no company website.\\n- \"keep\": true if this is a CURRENT portfolio company, INCLUDING publicly-traded ones still listed (a stock ticker, an exchange code such as SHA / HKSE / NASDAQ, or a \"Public\" status is NOT a reason to drop). Set false ONLY if the evidence shows it is no longer an independent active company: acquired, merged, shut down, or defunct.\\n- \"status\": one of current | public | acquired | merged | defunct.\\n\\nUse ONLY the evidence provided; do not browse or use outside knowledge. Respond ONLY as compact JSON: {\"companies\":[{\"source_url\":\"...\",\"domain\":\"...\",\"keep\":true,\"status\":\"...\"}]}.\\n\\nCompanies:\\n'+listed;\n  const fb=chunk.map(function(c){ return {source_url:c.source_url,name:c.name,domain:c.domain,lookup_url:c.source_url}; });\n  out.push({ json:{ vc_account_id:cfg.vc_account_id, vc_name:cfg.vc_name, vc_domain:cfg.vc_domain, _quarantine:false, chunk_index:Math.floor(i/CHUNK), _llm_prompt:prompt, _fallback:fb, _miner_note:note } });\n}\nreturn out.length?out:[{ json:{ vc_account_id:cfg.vc_account_id, vc_name:cfg.vc_name, vc_domain:cfg.vc_domain, _quarantine:false, chunk_index:0, _llm_prompt:'Respond ONLY as compact JSON: {\"companies\":[]}.', _fallback:[], _miner_note:note+\" (no profiles matched)\" } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2740,
+        360
+      ],
+      "id": "5d7c5b08-d0c1-45c2-ae1e-c6c0a85cead3",
+      "name": "Profiles → domains"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "has-prof",
+              "leftValue": "={{ $json._profile_count }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1750,
+        480
+      ],
+      "id": "46ac3621-5f2f-4b9b-abb8-d8327a33d99b",
+      "name": "Profiles to scrape? (det)"
+    }
+  ],
+  "connections": {
+    "Webhook In": {
+      "main": [
+        [
+          {
+            "node": "Build config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build config": {
+      "main": [
+        [
+          {
+            "node": "Map site (portfolio URLs)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map site (portfolio URLs)": {
+      "main": [
+        [
+          {
+            "node": "Build find-index prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build find-index prompt": {
+      "main": [
+        [
+          {
+            "node": "Pick portfolio index",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick portfolio index": {
+      "main": [
+        [
+          {
+            "node": "Parse index pick",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse index pick": {
+      "main": [
+        [
+          {
+            "node": "Portfolio page found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Portfolio page found?": {
+      "main": [
+        [
+          {
+            "node": "Flagged for review",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fingerprint page source",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build agent input": {
+      "main": [
+        [
+          {
+            "node": "Portfolio Discovery Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anthropic Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Portfolio Discovery Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Portfolio Discovery Agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Autofix Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Structured Output Parser",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Portfolio Discovery Agent": {
+      "main": [
+        [
+          {
+            "node": "Read plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read plan": {
+      "main": [
+        [
+          {
+            "node": "Save VC memory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route strategy": {
+      "main": [
+        [
+          {
+            "node": "Split page URLs",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Init state",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build crawl body",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Flagged for review",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Adapt companies",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Adapt companies": {
+      "main": [
+        [
+          {
+            "node": "Parse harvest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split page URLs": {
+      "main": [
+        [
+          {
+            "node": "Scrape page (batched)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scrape page (batched)": {
+      "main": [
+        [
+          {
+            "node": "Collect companies",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect companies": {
+      "main": [
+        [
+          {
+            "node": "Parse harvest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse harvest": {
+      "main": [
+        [
+          {
+            "node": "Quarantine?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Quarantine?": {
+      "main": [
+        [
+          {
+            "node": "Flagged for review",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build profile batch body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Claude": {
+      "main": [
+        [
+          {
+            "node": "Write to Portco Staging",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "think": {
+      "ai_tool": [
+        [
+          {
+            "node": "Portfolio Discovery Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "analyze_page": {
+      "ai_tool": [
+        [
+          {
+            "node": "Portfolio Discovery Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "firecrawl_scrape_extract": {
+      "ai_tool": [
+        [
+          {
+            "node": "Portfolio Discovery Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "web_search": {
+      "ai_tool": [
+        [
+          {
+            "node": "Portfolio Discovery Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "firecrawl_map": {
+      "ai_tool": [
+        [
+          {
+            "node": "Portfolio Discovery Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "firecrawl_render": {
+      "ai_tool": [
+        [
+          {
+            "node": "Portfolio Discovery Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "http_request": {
+      "ai_tool": [
+        [
+          {
+            "node": "Portfolio Discovery Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init state": {
+      "main": [
+        [
+          {
+            "node": "Build request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build request": {
+      "main": [
+        [
+          {
+            "node": "Claude (messages)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude (messages)": {
+      "main": [
+        [
+          {
+            "node": "Handle + service tools",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handle + service tools": {
+      "main": [
+        [
+          {
+            "node": "Done?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Done?": {
+      "main": [
+        [
+          {
+            "node": "Harvest → staging items",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Harvest → staging items": {
+      "main": [
+        [
+          {
+            "node": "Harvest needs review?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fingerprint page source": {
+      "main": [
+        [
+          {
+            "node": "Build agent input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save VC memory": {
+      "main": [
+        [
+          {
+            "node": "Route strategy",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Crawl submit (det)": {
+      "main": [
+        [
+          {
+            "node": "Wait 15s (crawl)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 15s (crawl)": {
+      "main": [
+        [
+          {
+            "node": "Get crawl status (det)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get crawl status (det)": {
+      "main": [
+        [
+          {
+            "node": "Crawl done? (det)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Crawl done? (det)": {
+      "main": [
+        [
+          {
+            "node": "Fetch all crawl pages",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Crawl failed? (det)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch all crawl pages": {
+      "main": [
+        [
+          {
+            "node": "Crawl → companies",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Crawl → companies": {
+      "main": [
+        [
+          {
+            "node": "Parse harvest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Crawl failed? (det)": {
+      "main": [
+        [
+          {
+            "node": "Crawl review reason",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait 15s (crawl)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Crawl review reason": {
+      "main": [
+        [
+          {
+            "node": "Flagged for review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Harvest needs review?": {
+      "main": [
+        [
+          {
+            "node": "Flagged for review",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Write harvest → Staging",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flagged for review": {
+      "main": [
+        [
+          {
+            "node": "Build review row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build review row": {
+      "main": [
+        [
+          {
+            "node": "Write review → Staging",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build crawl body": {
+      "main": [
+        [
+          {
+            "node": "Crawl submit (det)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build profile batch body": {
+      "main": [
+        [
+          {
+            "node": "Profiles to scrape? (det)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Profiles submit (det)": {
+      "main": [
+        [
+          {
+            "node": "Wait 15s (profiles)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 15s (profiles)": {
+      "main": [
+        [
+          {
+            "node": "Get profiles status (det)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get profiles status (det)": {
+      "main": [
+        [
+          {
+            "node": "Profiles done? (det)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Profiles done? (det)": {
+      "main": [
+        [
+          {
+            "node": "Fetch all profile pages",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait 15s (profiles)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch all profile pages": {
+      "main": [
+        [
+          {
+            "node": "Profiles → domains",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Profiles → domains": {
+      "main": [
+        [
+          {
+            "node": "Claude verdict",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude verdict": {
+      "main": [
+        [
+          {
+            "node": "Parse Claude",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Profiles to scrape? (det)": {
+      "main": [
+        [
+          {
+            "node": "Profiles submit (det)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Parse Claude",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false
+}

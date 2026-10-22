@@ -1,0 +1,64 @@
+{
+  "type": "object",
+  "properties": {
+    "strategy": {
+      "type": "string"
+    },
+    "companies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "domain": {
+            "type": "string"
+          },
+          "lookup_url": {
+            "type": "string"
+          },
+          "source_url": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "page_urls": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "estimated_count": {
+      "type": "number"
+    },
+    "archetype": {
+      "type": "string"
+    },
+    "tools_used": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "escalated": {
+      "type": "boolean"
+    },
+    "confidence": {
+      "type": "number"
+    },
+    "notes": {
+      "type": "string"
+    },
+    "crawl_url": {
+      "type": "string"
+    },
+    "path_hint": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "strategy"
+  ]
+}
